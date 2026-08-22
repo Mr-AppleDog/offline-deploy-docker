@@ -1,0 +1,38 @@
+server:
+  port: 8080
+
+spring:
+  # ---- MySQL（连线上 192.168.149.128:3306，未指定库，仅做连通性测试）----
+  datasource:
+    url: jdbc:mysql://192.168.149.128:3306/?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: mrlu
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  # ---- Redis ----
+  data:
+    redis:
+      host: 192.168.149.128
+      port: 6379
+      password: mrlu
+      database: 0
+      timeout: 3s
+
+  # ---- RabbitMQ ----
+  rabbitmq:
+    host: 192.168.149.128
+    port: 5672
+    username: admin
+    password: mrlu
+    virtual-host: /
+
+# ---- MinIO ----
+minio:
+  endpoint: http://192.168.149.128:9000
+  access-key: mrlu
+  secret-key: mrlumrlu
+  bucket: demo-bucket
+
+logging:
+  level:
+    root: info

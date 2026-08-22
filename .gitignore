@@ -1,0 +1,18 @@
+# Java / Maven
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# Node / 前端
+node_modules/
+dist/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# 环境变量（真实密码不入库，提交 .env.example 作为模板）
+.env
