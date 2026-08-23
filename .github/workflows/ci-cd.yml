@@ -16,11 +16,21 @@ jobs:
     env:
       BACKEND_IMAGE: localhost:5000/kunlun-backend
       FRONTEND_IMAGE: localhost:5000/kunlun-frontend
+      # github.com HTTPS 在本节点被重置(Recv failure),统一走 SSH 部署密钥拉取/推送。
+      GIT_SSH_COMMAND: "ssh -i /home/mrlu/.ssh/kunlun_deploy -o StrictHostKeyChecking=accept-new"
     steps:
-      - name: 拉代码(完整历史)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: '0'
+      - name: 拉代码(SSH,带重试)
+        run: |
+          repo="git@github.com:Mr-AppleDog/offline-deploy-docker.git"
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            echo "clone 第 ${attempt} 次"
+            rm -rf .git
+            if git clone --depth 1 "$repo" .; then ok=1; break; fi
+            sleep 10
+          done
+          [ "$ok" = 1 ] || { echo "SSH clone 连续 5 次失败"; exit 1; }
+          git log -1 --oneline
 
       - name: 计算镜像 tag
         id: tag
