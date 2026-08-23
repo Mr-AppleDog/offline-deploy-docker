@@ -28,7 +28,6 @@ public class BuildService {
     public Models.BuildTask create(BuildInput input) {
         Models.Project project = store.project(input.projectId);
         Models.DeploymentProfile profile = store.profile(input.profileId);
-        if (project.analysis == null) throw new IllegalArgumentException("创建构建任务前必须完成仓库分析");
         Models.BuildTarget target = Models.BuildTarget.of(input.targetOs, input.targetArch).normalized();
         String type = input.packageType == null ? "" : input.packageType.toUpperCase(Locale.ROOT);
         if (!List.of("BOOTSTRAP", "APP_UPDATE").contains(type)) throw new IllegalArgumentException("不支持的包类型");
@@ -39,12 +38,21 @@ public class BuildService {
             requireVersion(input.fromVersion, "起始版本");
             if (input.fromVersion.equals(input.targetVersion)) throw new IllegalArgumentException("更新包的起始版本和目标版本不能相同");
         }
-        for (String role : scope) {
-            if (project.repositories.stream().noneMatch(repository -> role.equals(repository.role)))
-                throw new IllegalArgumentException("项目没有配置 " + role + " 仓库");
+        List<String> dbInitSqlIds = input.dbInitSqlIds == null ? List.of() : List.copyOf(input.dbInitSqlIds);
+        List<String> dbMigrationSqlIds = input.dbMigrationSqlIds == null ? List.of() : List.copyOf(input.dbMigrationSqlIds);
+        if (input.dbMigrationRequired && dbMigrationSqlIds.isEmpty())
+            throw new IllegalArgumentException("声明数据库迁移时必须选择迁移 SQL 脚本");
+        for (String id : dbInitSqlIds) {
+            Models.SqlScript script = store.sqlScript(id);
+            if (!"INIT".equals(script.kind)) throw new IllegalArgumentException("脚本 " + script.name + " 不是初始化脚本");
         }
-        if (input.dbMigrationRequired && (input.databaseMigrationDirectory == null || input.databaseMigrationDirectory.isBlank()))
-            throw new IllegalArgumentException("声明数据库迁移时必须配置迁移目录");
+        for (String id : dbMigrationSqlIds) {
+            Models.SqlScript script = store.sqlScript(id);
+            if (!"MIGRATION".equals(script.kind)) throw new IllegalArgumentException("脚本 " + script.name + " 不是迁移脚本");
+            if (!input.targetVersion.equals(script.targetVersion))
+                throw new IllegalArgumentException("迁移脚本 " + script.name + " 目标版本 " + script.targetVersion
+                        + " 与目标 " + input.targetVersion + " 不一致");
+        }
         if (input.packageRevision != null && !input.packageRevision.isBlank()
                 && !input.packageRevision.matches("^r[1-9][0-9]*$"))
             throw new IllegalArgumentException("包修订号必须使用 r1、r2 这类格式");
@@ -62,14 +70,14 @@ public class BuildService {
                         + " 必须与目标版本 " + input.targetVersion + " 一致（镜像名 <appKey>-<role>:<版本>）");
             components.add(artifact.component);
         }
+        if (components.size() != artifactIds.size()) throw new IllegalArgumentException("同一个组件只能选择一个制品版本");
         if ("BOOTSTRAP".equals(type)) {
             Set<String> required = new LinkedHashSet<>();
             required.add("docker-engine");
             required.add("docker-compose");
-            required.addAll(ArtifactService.APP_IMAGE_COMPONENTS);
             for (Models.MiddlewareCredential mc : profile.middleware) required.add(mc.component);
-            if (!components.equals(required)) throw new IllegalArgumentException("初始化包必须且只能选择 Docker、Compose、前后端应用镜像以及部署配置中声明的每个中间件制品");
-            if (components.size() != artifactIds.size()) throw new IllegalArgumentException("同一个组件只能选择一个制品版本");
+            for (String req : required) if (!components.contains(req)) throw new IllegalArgumentException("初始化包必须选择 Docker、Compose 以及部署配置中声明的每个中间件制品（前后端应用镜像可选，不上传则 application/images 为空）");
+            for (String c : components) if (!required.contains(c) && !ArtifactService.APP_IMAGE_COMPONENTS.contains(c)) throw new IllegalArgumentException("初始化包不支持该制品组件：" + c);
         } else {
             for (String role : scope) {
                 String appComponent = "app-" + role.toLowerCase(Locale.ROOT);
@@ -89,8 +97,8 @@ public class BuildService {
         spec.artifactIds = new ArrayList<>(artifactIds);
         spec.updateScope = new ArrayList<>(scope);
         spec.dbMigrationRequired = input.dbMigrationRequired;
-        spec.databaseInitDirectory = clean(input.databaseInitDirectory);
-        spec.databaseMigrationDirectory = clean(input.databaseMigrationDirectory);
+        spec.dbInitSqlIds = new ArrayList<>(dbInitSqlIds);
+        spec.dbMigrationSqlIds = new ArrayList<>(dbMigrationSqlIds);
         spec.targetOs = target.os;
         spec.targetArch = target.arch;
 
@@ -140,8 +148,8 @@ public class BuildService {
         public List<String> artifactIds;
         public List<String> updateScope;
         public boolean dbMigrationRequired;
-        public String databaseInitDirectory;
-        public String databaseMigrationDirectory;
+        public List<String> dbInitSqlIds;
+        public List<String> dbMigrationSqlIds;
         public String targetOs;
         public String targetArch;
     }

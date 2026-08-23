@@ -63,5 +63,6 @@ kunlun:
     enabled: false
 
 spring.servlet.multipart:
+  location: ${KUNLUN_PLATFORM_DATA_DIR:../.kunlun-builder}/tmp
   max-file-size: 20GB
   max-request-size: 20GB

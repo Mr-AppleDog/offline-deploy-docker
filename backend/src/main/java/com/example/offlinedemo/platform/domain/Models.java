@@ -80,6 +80,7 @@ public final class Models {
         public Map<String, Project> projects = new LinkedHashMap<>();
         public Map<String, DeploymentProfile> profiles = new LinkedHashMap<>();
         public Map<String, Artifact> artifacts = new LinkedHashMap<>();
+        public Map<String, SqlScript> sqlScripts = new LinkedHashMap<>();
         public Map<String, BuildTask> builds = new LinkedHashMap<>();
     }
 
@@ -162,6 +163,22 @@ public final class Models {
         public Instant createdAt;
     }
 
+    /** 数据库脚本制品：通过页面上传入库，构建时按 id 引用拷进交付包。 */
+    public static final class SqlScript {
+        public String id;
+        /** INIT = 初始化 SQL（随 bootstrap 包进 database/init）；MIGRATION = 迁移 SQL（进 database/migrations/&lt;版本&gt;）。 */
+        public String kind;
+        public String name;
+        public String targetVersion;
+        public String fileName;
+        public String storagePath;
+        public String objectKey;
+        public String storeType = "local";
+        public String sha256;
+        public long size;
+        public Instant createdAt;
+    }
+
     public static final class BuildSpec {
         public String projectId;
         public String profileId;
@@ -173,8 +190,8 @@ public final class Models {
         public List<String> artifactIds = new ArrayList<>();
         public List<String> updateScope = new ArrayList<>();
         public boolean dbMigrationRequired;
-        public String databaseInitDirectory;
-        public String databaseMigrationDirectory;
+        public List<String> dbInitSqlIds = new ArrayList<>();
+        public List<String> dbMigrationSqlIds = new ArrayList<>();
         public String targetOs;
         public String targetArch;
     }

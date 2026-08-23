@@ -31,13 +31,16 @@ public class PlatformStore {
     public synchronized void initialize() throws Exception {
         Files.createDirectories(root);
         Files.createDirectories(artifactsRoot());
+        Files.createDirectories(sqlScriptsRoot());
         Files.createDirectories(workspacesRoot());
+        Files.createDirectories(root.resolve("tmp"));
         Files.createDirectories(deliveriesRoot());
         Files.createDirectories(logsRoot());
         state = metadataStore.load();
         if (state.projects == null) state.projects = new java.util.LinkedHashMap<>();
         if (state.profiles == null) state.profiles = new java.util.LinkedHashMap<>();
         if (state.artifacts == null) state.artifacts = new java.util.LinkedHashMap<>();
+        if (state.sqlScripts == null) state.sqlScripts = new java.util.LinkedHashMap<>();
         if (state.builds == null) state.builds = new java.util.LinkedHashMap<>();
         boolean recovered = false;
         for (Models.BuildTask task : state.builds.values()) {
@@ -54,6 +57,7 @@ public class PlatformStore {
 
     public Path root() { return root; }
     public Path artifactsRoot() { return root.resolve("artifacts"); }
+    public Path sqlScriptsRoot() { return root.resolve("sql-scripts"); }
     public Path workspacesRoot() { return root.resolve("workspaces"); }
     public Path deliveriesRoot() { return root.resolve("deliveries"); }
     public Path logsRoot() { return root.resolve("logs"); }
@@ -113,6 +117,28 @@ public class PlatformStore {
 
     public synchronized void putArtifact(Models.Artifact artifact) {
         state.artifacts.put(artifact.id, artifact);
+        save();
+    }
+
+    public synchronized List<Models.SqlScript> sqlScripts() {
+        return state.sqlScripts.values().stream()
+                .sorted(Comparator.comparing((Models.SqlScript s) -> s.createdAt).reversed())
+                .toList();
+    }
+
+    public synchronized Models.SqlScript sqlScript(String id) {
+        Models.SqlScript value = state.sqlScripts.get(id);
+        if (value == null) throw new NotFoundException("数据库脚本不存在：" + id);
+        return value;
+    }
+
+    public synchronized void putSqlScript(Models.SqlScript script) {
+        state.sqlScripts.put(script.id, script);
+        save();
+    }
+
+    public synchronized void deleteSqlScript(String id) {
+        if (state.sqlScripts.remove(id) == null) throw new NotFoundException("数据库脚本不存在：" + id);
         save();
     }
 

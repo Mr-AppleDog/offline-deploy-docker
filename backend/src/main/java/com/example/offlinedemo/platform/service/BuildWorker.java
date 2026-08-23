@@ -78,22 +78,15 @@ public class BuildWorker {
 
             workspace = FileSupport.safeResolve(store.workspacesRoot(), "build/" + taskId, "构建目录");
             Files.createDirectories(workspace);
-            stage(taskId, "拉取并锁定源码", 10);
-            List<RepositoryService.RepositorySnapshot> snapshots = repositories.checkout(project,
-                    "build/" + taskId + "/sources", line -> log(taskId, line));
-            Map<String, RepositoryService.RepositorySnapshot> byRole = new LinkedHashMap<>();
-            for (RepositoryService.RepositorySnapshot snapshot : snapshots) {
-                byRole.put(snapshot.role(), snapshot);
-                store.updateBuild(taskId, value -> value.sourceCommits.put(snapshot.role(), snapshot.commit()));
-            }
-
+            stage(taskId, "校验构建素材", 10);
             Map<String, Models.Artifact> selected = new LinkedHashMap<>();
             for (Models.Artifact artifact : artifacts.selected(task.spec.artifactIds)) selected.put(artifact.component, artifact);
 
             stage(taskId, "加载应用镜像", 24);
             List<ImageRecord> imageRecords = new ArrayList<>();
             for (String role : task.spec.updateScope) {
-                imageRecords.add(loadApplicationArtifact(task, project, role, selected, workspace));
+                ImageRecord appRecord = loadApplicationArtifact(task, project, role, selected, workspace);
+                if (appRecord != null) imageRecords.add(appRecord);
             }
             if ("BOOTSTRAP".equals(task.packageType)) {
                 stage(taskId, "校验中间件镜像", 48);
@@ -111,7 +104,7 @@ public class BuildWorker {
             }
 
             stage(taskId, "组装离线包", 62);
-            PackageResult packageResult = assemble(task, project, profile, selected, imageRecords, byRole, workspace);
+            PackageResult packageResult = assemble(task, project, profile, selected, imageRecords, workspace);
             stage(taskId, "生成校验文件并压缩", 82);
             Path checksumFile = packageResult.root.resolve("SHA256SUMS");
             writeChecksums(packageResult.root, checksumFile);
@@ -155,7 +148,10 @@ public class BuildWorker {
         }
     }
 
-    /** 应用镜像改为从已导入的制品 tar 加载并校验，不再从源码 buildx 构建。 */
+    /**
+     * 应用镜像从已导入的制品 tar 加载并校验。若未导入该角色对应的 app 制品，返回 null 跳过
+     *（application/images 该角色留空，install 阶段只启动中间件）。
+     */
     private ImageRecord loadApplicationArtifact(Models.BuildTask task, Models.Project project,
                                                 String role, Map<String, Models.Artifact> selected,
                                                 Path workspace) throws Exception {
@@ -163,8 +159,10 @@ public class BuildWorker {
         String suffix = role.toLowerCase(Locale.ROOT);
         String component = "app-" + suffix;
         Models.Artifact artifact = selected.get(component);
-        if (artifact == null) throw new IllegalArgumentException("缺少应用镜像制品：" + component
-                + "（请在离线制品库导入 app-" + suffix + " 制品）");
+        if (artifact == null) {
+            log(task.id, "未选择 " + component + " 应用镜像制品，application/images 该角色留空");
+            return null;
+        }
         String image = project.appKey + "-" + suffix + ":" + task.targetVersion;
         Path localTar = artifactLocal(artifact, workspace.resolve(".cache"));
         log(task.id, "加载应用镜像 " + image + "（制品 " + artifact.fileName + "）");
@@ -178,7 +176,6 @@ public class BuildWorker {
                                    ProfileService.ResolvedProfile profile,
                                    Map<String, Models.Artifact> selected,
                                    List<ImageRecord> records,
-                                   Map<String, RepositoryService.RepositorySnapshot> snapshots,
                                    Path workspace) throws Exception {
         String revision = task.spec.packageRevision == null || task.spec.packageRevision.isBlank()
                 ? "" : "-" + task.spec.packageRevision;
@@ -195,9 +192,11 @@ public class BuildWorker {
         int frontendVersionChanged = task.spec.updateScope.contains("FRONTEND") ? 1 : 0;
         String backendVersion = backendVersionChanged == 1 ? task.targetVersion : task.fromVersion;
         String frontendVersion = frontendVersionChanged == 1 ? task.targetVersion : task.fromVersion;
+        java.util.Set<String> includedApps = new java.util.LinkedHashSet<>(ArtifactService.APP_IMAGE_COMPONENTS);
+        includedApps.retainAll(selected.keySet());
         Files.writeString(application.resolve("compose.app.yml"),
                 composeRenderer.application(profile, project.appKey, backendVersion, frontendVersion,
-                        project.backendHealthPath, project.frontendHealthPath, catalogEntries, target), StandardCharsets.UTF_8);
+                        project.backendHealthPath, project.frontendHealthPath, catalogEntries, includedApps, target), StandardCharsets.UTF_8);
 
         Path appImageDir = application.resolve("images").resolve(task.targetVersion);
         Files.createDirectories(appImageDir);
@@ -235,15 +234,15 @@ public class BuildWorker {
             copyIfExists(projectRoot.resolve("README.md"), root.resolve("README.md"));
             copyIfExists(projectRoot.resolve("部署手册.md"), root.resolve("部署手册.md"));
             FileSupport.copyTree(projectRoot.resolve("docs"), root.resolve("docs"));
-            copyDatabaseDirectory(task.spec.databaseInitDirectory, snapshots, root.resolve("database/init"));
+            copySqlScripts(task.id, task.spec.dbInitSqlIds, root.resolve("database/init"), workspace.resolve(".cache"));
             if (task.spec.dbMigrationRequired)
-                copyDatabaseDirectory(task.spec.databaseMigrationDirectory, snapshots,
-                        root.resolve("database/migrations").resolve(task.targetVersion));
+                copySqlScripts(task.id, task.spec.dbMigrationSqlIds,
+                        root.resolve("database/migrations").resolve(task.targetVersion), workspace.resolve(".cache"));
         } else {
             Path migrations = root.resolve("database/migrations").resolve(task.targetVersion);
             Files.createDirectories(migrations);
             if (task.spec.dbMigrationRequired)
-                copyDatabaseDirectory(task.spec.databaseMigrationDirectory, snapshots, migrations);
+                copySqlScripts(task.id, task.spec.dbMigrationSqlIds, migrations, workspace.resolve(".cache"));
             Files.createDirectories(root.resolve("scripts"));
             copyIfExists(projectRoot.resolve("deploy/scripts/common.sh"), root.resolve("scripts/common.sh"));
             copyIfExists(projectRoot.resolve("deploy/scripts/install-app-update.sh"), root.resolve("scripts/install-app-update.sh"));
@@ -282,14 +281,33 @@ public class BuildWorker {
         copyIfExists(projectRoot.resolve("deploy/systemd/docker.service"), install.resolve("docker.service"));
     }
 
-    private void copyDatabaseDirectory(String relative, Map<String, RepositoryService.RepositorySnapshot> snapshots,
-                                       Path destination) throws IOException {
-        if (relative == null || relative.isBlank()) return;
-        RepositoryService.RepositorySnapshot backend = snapshots.get("BACKEND");
-        if (backend == null) throw new IllegalArgumentException("数据库脚本要求配置 BACKEND 仓库");
-        Path source = FileSupport.safeResolve(backend.contextRoot(), relative, "数据库脚本目录");
-        if (!Files.isDirectory(source)) throw new IllegalArgumentException("数据库脚本目录不存在：" + relative);
-        FileSupport.copyTree(source, destination);
+    /** 把选中的数据库脚本制品物化并拷进交付包指定目录；文件名冲突时用 id 前缀消歧。 */
+    private void copySqlScripts(String taskId, List<String> ids, Path destination, Path cache) throws Exception {
+        if (ids == null || ids.isEmpty()) return;
+        Files.createDirectories(destination);
+        for (String id : ids) {
+            Models.SqlScript script = store.sqlScript(id);
+            Path local = sqlLocal(script, cache);
+            Path target = destination.resolve(script.fileName);
+            if (Files.exists(target)) {
+                String name = script.fileName;
+                int dot = name.lastIndexOf('.');
+                String base = dot > 0 ? name.substring(0, dot) : name;
+                String ext = dot > 0 ? name.substring(dot) : "";
+                target = destination.resolve(script.id.substring(0, 8) + "-" + base + ext);
+            }
+            Files.copy(local, target, StandardCopyOption.REPLACE_EXISTING);
+            log(taskId, "数据库脚本入包：" + script.fileName);
+        }
+    }
+
+    private Path sqlLocal(Models.SqlScript script, Path cacheDir) throws Exception {
+        if ("minio".equals(script.storeType)) {
+            return blobStore.materialize(new BlobStore.BlobRef("minio", script.objectKey), script.fileName, cacheDir);
+        }
+        Path local = Path.of(script.storagePath);
+        if (!Files.isRegularFile(local)) throw new IllegalStateException("脚本本地文件不存在：" + local);
+        return local;
     }
 
     private void parameterizeBootstrapInstaller(Path installer, Models.BuildTask task,
@@ -330,8 +348,10 @@ public class BuildWorker {
         lines.add("PROJECT_KEY=" + project.appKey);
         lines.add("DEPLOYMENT_PROFILE_ID=" + profile.profile().id);
         lines.add("DEPLOYMENT_PROFILE_REVISION=" + profile.profile().revision);
-        lines.add("BACKEND_IMAGE=" + project.appKey + "-backend:" + backendVersion);
-        lines.add("FRONTEND_IMAGE=" + project.appKey + "-frontend:" + frontendVersion);
+        java.util.Set<String> includedApps = new java.util.LinkedHashSet<>(ArtifactService.APP_IMAGE_COMPONENTS);
+        includedApps.retainAll(selected.keySet());
+        lines.add("BACKEND_IMAGE=" + (includedApps.contains("app-backend") ? project.appKey + "-backend:" + backendVersion : ""));
+        lines.add("FRONTEND_IMAGE=" + (includedApps.contains("app-frontend") ? project.appKey + "-frontend:" + frontendVersion : ""));
         lines.add("BACKEND_HEALTH_PATH=" + project.backendHealthPath);
         lines.add("FRONTEND_HEALTH_PATH=" + project.frontendHealthPath);
         lines.add("DB_MIGRATION_REQUIRED=" + task.spec.dbMigrationRequired);

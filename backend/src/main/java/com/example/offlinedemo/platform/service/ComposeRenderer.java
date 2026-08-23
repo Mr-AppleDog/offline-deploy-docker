@@ -36,7 +36,8 @@ public class ComposeRenderer {
     public String application(ProfileService.ResolvedProfile resolved, String appKey,
                               String backendVersion, String frontendVersion,
                               String backendHealthPath, String frontendHealthPath,
-                              List<CatalogEntry> selected, Models.BuildTarget target) {
+                              List<CatalogEntry> selected, java.util.Set<String> includedApps,
+                              Models.BuildTarget target) {
         StringBuilder sb = new StringBuilder();
         sb.append("name: kunlun-app\n\n");
         sb.append("# 由 Kunlun 离线交付平台生成。必须与在线 middleware Compose 的凭据一致。\n");
@@ -45,7 +46,7 @@ public class ComposeRenderer {
         appendCommon(sb, target.ociPlatform());
         sb.append("\nservices:\n");
         appendAppService(sb, resolved, selected, appKey, backendVersion, frontendVersion,
-                backendHealthPath, frontendHealthPath);
+                backendHealthPath, frontendHealthPath, includedApps);
         appendNetworks(sb);
         return sb.toString();
     }
@@ -109,38 +110,43 @@ public class ComposeRenderer {
 
     private void appendAppService(StringBuilder sb, ProfileService.ResolvedProfile resolved,
                                   List<CatalogEntry> selected, String appKey, String backendVersion,
-                                  String frontendVersion, String backendHealthPath, String frontendHealthPath) {
-        sb.append("  backend:\n")
-                .append("    <<: *common\n")
-                .append("    image: ").append(appKey).append("-backend:").append(backendVersion).append('\n')
-                .append("    environment:\n");
-        for (CatalogEntry entry : selected) {
-            for (CatalogEntry.EnvEntry conn : entry.appConnections) {
-                appendAppEnv(sb, entry, conn, resolved);
+                                  String frontendVersion, String backendHealthPath, String frontendHealthPath,
+                                  java.util.Set<String> includedApps) {
+        boolean hasBackend = includedApps != null && includedApps.contains("app-backend");
+        boolean hasFrontend = includedApps != null && includedApps.contains("app-frontend");
+        if (hasBackend) {
+            sb.append("  backend:\n")
+                    .append("    <<: *common\n")
+                    .append("    image: ").append(appKey).append("-backend:").append(backendVersion).append('\n')
+                    .append("    environment:\n");
+            for (CatalogEntry entry : selected) {
+                for (CatalogEntry.EnvEntry conn : entry.appConnections) {
+                    appendAppEnv(sb, entry, conn, resolved);
+                }
             }
+            sb.append("      JAVA_TOOL_OPTIONS: ").append(yaml(resolved.profile().javaOptions)).append('\n')
+                    .append("      TZ: ").append(yaml(resolved.profile().timezone)).append('\n')
+                    .append("    healthcheck:\n")
+                    .append("      test: [\"CMD\", \"wget\", \"-q\", \"-O\", \"/dev/null\", ")
+                    .append(yaml("http://127.0.0.1:8080" + backendHealthPath)).append("]\n")
+                    .append("      interval: 10s\n")
+                    .append("      timeout: 5s\n")
+                    .append("      retries: 18\n")
+                    .append("      start_period: 30s\n\n");
         }
-        sb.append("      JAVA_TOOL_OPTIONS: ").append(yaml(resolved.profile().javaOptions)).append('\n')
-                .append("      TZ: ").append(yaml(resolved.profile().timezone)).append('\n')
-                .append("    healthcheck:\n")
-                .append("      test: [\"CMD\", \"wget\", \"-q\", \"-O\", \"/dev/null\", ")
-                .append(yaml("http://127.0.0.1:8080" + backendHealthPath)).append("]\n")
-                .append("      interval: 10s\n")
-                .append("      timeout: 5s\n")
-                .append("      retries: 18\n")
-                .append("      start_period: 30s\n\n");
-
-        sb.append("  frontend:\n")
-                .append("    <<: *common\n")
-                .append("    image: ").append(appKey).append("-frontend:").append(frontendVersion).append('\n')
-                .append("    depends_on:\n")
-                .append("      backend: { condition: service_healthy }\n")
-                .append("    ports: [").append(resolved.profile().frontendPort).append(":80]\n")
-                .append("    healthcheck:\n")
-                .append("      test: [\"CMD\", \"wget\", \"-q\", \"-O\", \"/dev/null\", ")
-                .append(yaml("http://127.0.0.1" + frontendHealthPath)).append("]\n")
-                .append("      interval: 10s\n")
-                .append("      timeout: 5s\n")
-                .append("      retries: 12\n\n");
+        if (hasFrontend) {
+            sb.append("  frontend:\n")
+                    .append("    <<: *common\n")
+                    .append("    image: ").append(appKey).append("-frontend:").append(frontendVersion).append('\n');
+            if (hasBackend) sb.append("    depends_on:\n      backend: { condition: service_healthy }\n");
+            sb.append("    ports: [").append(resolved.profile().frontendPort).append(":80]\n")
+                    .append("    healthcheck:\n")
+                    .append("      test: [\"CMD\", \"wget\", \"-q\", \"-O\", \"/dev/null\", ")
+                    .append(yaml("http://127.0.0.1" + frontendHealthPath)).append("]\n")
+                    .append("      interval: 10s\n")
+                    .append("      timeout: 5s\n")
+                    .append("      retries: 12\n\n");
+        }
     }
 
     private void appendAppEnv(StringBuilder sb, CatalogEntry entry, CatalogEntry.EnvEntry conn,

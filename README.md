@@ -6,11 +6,12 @@
 
 主要能力：
 
-- 项目以及前后端 Git 仓库配置，支持公开仓库、HTTPS Token、SSH 私钥和单仓库子目录；
-- 锁定实际 Commit，静态分析 Maven、Node、Compose、Dockerfile 和 SQL，识别中间件依赖；
+- 项目登记 appKey、当前版本与健康路径，用于镜像命名与 Compose 门禁；**无需配置代码仓库、无需仓库分析**；
+- **页面上传驱动**：前后端镜像 tar 与数据库 SQL 通过页面上传入库，自动计算 SHA256，构建时下拉选择、可复用；
+- **数据库脚本库**：初始化 SQL（随 bootstrap 包入 `database/init`）与迁移 SQL（入 `database/migrations/<版本>`）分类入库，构建时按目标版本选择入包；
 - **中间件注册表**：内置 MySQL、PostgreSQL、人大金仓 KingbaseES、达梦 DM8、瀚高 HighGo、MongoDB、Redis、RabbitMQ、Kafka、RocketMQ、Elasticsearch、MinIO、Nginx、东方通 TongWeb 等 14 类，新增中间件只需加一条目录定义，不写死代码；
 - **双架构目标**：Kylin V10 `amd64` 与 `arm64`，产物命名 `-kylin-v10-<arch>`，贯穿镜像 tar 导入、Compose 平台与安装脚本校验；
-- 管理 Docker、Compose 及各类中间件的离线制品（按架构分区）；
+- 上传 Docker、Compose、各类中间件镜像 tar 与前后端应用镜像 tar（按架构分区）；
 - 按站点配置各中间件独立账号密码，使用 AES-GCM 加密持久化，页面和 API 不回显密文；
 - 异步串行构建，输出实时任务阶段、日志、manifest、镜像清单和 SHA256；
 - 生成完整初始化包或前端/后端应用更新包；数据库迁移默认随应用更新包交付；
@@ -18,7 +19,7 @@
 
 ### 本地开发启动
 
-后端要求 JDK 17、Maven、Git、tar、Docker Engine。前端要求 Node.js 20+。项目不需要也禁止使用 Anaconda。
+后端要求 JDK 17、Maven、tar、Docker Engine。前端要求 Node.js 20+。项目不需要也禁止使用 Anaconda。
 
 ```powershell
 $env:KUNLUN_ADMIN_TOKEN='请设置足够长的管理令牌'
@@ -41,7 +42,7 @@ $env:KUNLUN_ADMIN_TOKEN='请设置足够长的管理令牌'
 docker compose -f compose.platform.yml up -d --build
 ```
 
-访问 `http://localhost:8088`。平台后端为了执行镜像 load/inspect 与 compose config 校验会挂载 Docker Socket，这等同于主机级权限，只能部署在受控构建机，不能直接暴露到公网。代码仓库或额外离线介质目录需要挂载到后端容器后，再填写容器内路径。
+访问 `http://localhost:8088`。平台后端为了执行镜像 load/inspect 与 compose config 校验会挂载 Docker Socket，这等同于主机级权限，只能部署在受控构建机，不能直接暴露到公网。镜像 tar 与数据库 SQL 通过 HTTP multipart 上传入库，无需挂载介质目录；若构建机磁盘有限，可把数据目录挂载为卷。
 
 ### 平台持久化（真实 MySQL + MinIO）
 
@@ -58,9 +59,9 @@ docker compose -f compose.platform.yml up -d --build
 
 ### 推荐使用顺序
 
-1. 在“项目与仓库”创建项目，配置 BACKEND 和 FRONTEND 仓库并执行分析。
-2. 在“部署配置”创建站点配置，使用页面为五类密码生成独立强密码。
-3. 在“离线制品库”导入 Docker Engine、Compose、所需中间件 tar，以及前后端应用镜像 tar（在平台外 build 后 `docker tag <appKey>-backend:<版本>` 再 `docker save`）。
+1. 在“项目”创建项目，填写 appKey、版本与健康路径（无需配仓库、无需分析）。
+2. 在“部署配置”创建站点配置，勾选中间件，使用页面为五类密码生成独立强密码。
+3. 在“离线制品库”上传 Docker Engine、Compose、所需中间件 tar，以及前后端应用镜像 tar（在平台外 build 后 `docker tag <appKey>-backend:<版本>` 再 `docker save`）；在“数据库脚本库”上传初始化 / 迁移 SQL。
 4. 在“构建与交付”选择初始化包或应用更新包并提交任务。
 5. 构建成功后下载 `.tar.gz`，同时保存页面显示的 SHA256。
 

@@ -6,6 +6,7 @@ import com.example.offlinedemo.platform.domain.Models;
 import com.example.offlinedemo.platform.service.ArtifactService;
 import com.example.offlinedemo.platform.service.ProfileService;
 import com.example.offlinedemo.platform.service.ProjectService;
+import com.example.offlinedemo.platform.service.SqlScriptService;
 import com.example.offlinedemo.platform.store.PlatformStore;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -15,12 +16,19 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/platform")
@@ -29,14 +37,16 @@ public class PlatformController {
     private final ProjectService projects;
     private final ProfileService profiles;
     private final ArtifactService artifacts;
+    private final SqlScriptService sqlScripts;
     private final MiddlewareCatalog catalog;
 
     public PlatformController(PlatformStore store, ProjectService projects, ProfileService profiles,
-                              ArtifactService artifacts, MiddlewareCatalog catalog) {
+                              ArtifactService artifacts, SqlScriptService sqlScripts, MiddlewareCatalog catalog) {
         this.store = store;
         this.projects = projects;
         this.profiles = profiles;
         this.artifacts = artifacts;
+        this.sqlScripts = sqlScripts;
         this.catalog = catalog;
     }
 
@@ -46,6 +56,7 @@ public class PlatformController {
                 "projects", store.projects().size(),
                 "profiles", store.profiles().size(),
                 "artifacts", store.artifacts().size(),
+                "sqlScripts", store.sqlScripts().size(),
                 "builds", store.builds().size(),
                 "runningBuilds", store.countBuildsByStatus("RUNNING") + store.countBuildsByStatus("QUEUED"),
                 "architecture", Models.ARCHITECTURE,
@@ -137,8 +148,49 @@ public class PlatformController {
 
     @PostMapping("/artifacts/import")
     @ResponseStatus(HttpStatus.CREATED)
-    public Models.Artifact importArtifact(@RequestBody ArtifactInput input) throws Exception {
-        return artifacts.importFile(input.component, input.version, input.sourcePath, input.arch);
+    public Models.Artifact importArtifact(@RequestPart("file") MultipartFile file,
+                                           @RequestParam String component,
+                                           @RequestParam String version,
+                                           @RequestParam(defaultValue = "amd64") String arch) throws Exception {
+        Path staged = stageUpload(file);
+        try {
+            return artifacts.importFile(component, version, staged.toString(), arch);
+        } finally {
+            Files.deleteIfExists(staged);
+        }
+    }
+
+    @GetMapping("/sql-scripts")
+    public List<Models.SqlScript> sqlScripts() { return store.sqlScripts(); }
+
+    @PostMapping("/sql-scripts")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Models.SqlScript importSqlScript(@RequestPart("file") MultipartFile file,
+                                             @RequestParam String kind,
+                                             @RequestParam String name,
+                                             @RequestParam String targetVersion) throws Exception {
+        Path staged = stageUpload(file);
+        try {
+            return sqlScripts.importFile(kind, name, targetVersion, staged.toString());
+        } finally {
+            Files.deleteIfExists(staged);
+        }
+    }
+
+    @DeleteMapping("/sql-scripts/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteSqlScript(@PathVariable String id) { store.deleteSqlScript(id); }
+
+    /** 把上传文件暂存到 workspaces/uploads，保留原始扩展名（校验依赖后缀），调用方负责删除。 */
+    private Path stageUpload(MultipartFile file) throws IOException {
+        Path dir = store.workspacesRoot().resolve("uploads");
+        Files.createDirectories(dir);
+        String original = file.getOriginalFilename();
+        if (original == null || original.isBlank()) original = "upload.bin";
+        String safe = original.replaceAll("[^A-Za-z0-9._+-]", "-");
+        Path target = dir.resolve(UUID.randomUUID() + "-" + safe);
+        file.transferTo(target.toFile());
+        return target;
     }
 
     private Map<String, Object> projectView(Models.Project project) {
@@ -234,5 +286,4 @@ public class PlatformController {
         public String dockerfile; public String authType; public String username; public String secret;
     }
     public static final class AnalysisConfirmation { public Map<String, Boolean> decisions; }
-    public static final class ArtifactInput { public String component; public String version; public String sourcePath; public String arch; }
 }
