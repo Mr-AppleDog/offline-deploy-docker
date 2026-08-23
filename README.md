@@ -1,85 +1,107 @@
-# 前后端分离示例：中间件联通性测试
+# Kunlun 离线 Docker 部署
 
-一个最小可跑的 **Spring Boot 3 + Vue 3** 前后端分离项目。前端只有一个页面，用来验证后端能否正确连通四类中间件：
+## Web 离线交付平台
 
-- **MySQL** — JDBC 直连，执行 `SELECT 1` / `SELECT VERSION()`
-- **Redis** — 写入/读取一个 key，并回读 TTL
-- **RabbitMQ** — 发一条消息到队列再从队列取回（验证发布/消费全链路）
-- **MinIO** — 上传 / stat / 删除一个小对象（bucket 不存在会自动创建）
+当前项目已经从固定示例打包脚本扩展为可视化离线交付平台。平台运行在可访问代码仓库和 Docker Engine 的受控 x86_64 构建机上，生成供无外网 Kylin `x86_64` 服务器使用的离线包。
 
-所有凭据默认指向你环境里已经跑起来的 `192.168.149.128`，开箱即可测通。
+主要能力：
 
-> **部署**（Docker、离线机、一键上线）请看唯一权威文档 **[部署手册.md](部署手册.md)**。本 README 只讲本地开发运行。
+- 项目以及前后端 Git 仓库配置，支持公开仓库、HTTPS Token、SSH 私钥和单仓库子目录；
+- 锁定实际 Commit，静态分析 Maven、Node、Compose、Dockerfile 和 SQL；
+- 管理 Docker、Compose、MySQL、Redis、RabbitMQ、MinIO 等 `linux/amd64` 离线制品；
+- 按站点配置 MySQL、Redis、RabbitMQ、MinIO 的独立账号密码；
+- 使用 AES-GCM 加密持久化密码，页面和 API 不回显密文；
+- 异步串行构建，输出实时任务阶段、日志、manifest、镜像清单和 SHA256；
+- 生成完整初始化包或前端/后端应用更新包；数据库迁移默认随应用更新包交付。
 
-## 目录结构
+### 本地开发启动
 
-```
-offline-deploy-doker/
-├── backend/                 # Spring Boot 3 后端（Java 17，Maven）
-│   ├── pom.xml
-│   └── src/main/
-│       ├── resources/application.yml   # 中间件连接配置
-│       └── java/com/example/offlinedemo/
-│           ├── OfflineDemoApplication.java
-│           ├── config/      # RabbitMQ / MinIO / CORS 配置
-│           ├── controller/HealthController.java
-│           ├── service/HealthService.java   # 四个中间件的检测逻辑
-│           └── dto/ServiceStatus.java
-└── frontend/                # Vue 3 + Vite 前端
-    ├── package.json
-    ├── vite.config.js       # /api 代理到 localhost:8080
-    ├── index.html
-    └── src/App.vue          # 单页面：四张卡片 + 测试按钮
-```
+后端要求 JDK 17、Maven、Git、tar、Docker Engine 和 Buildx。前端要求 Node.js 20+。项目不需要也禁止使用 Anaconda。
 
-## 前置要求
-
-- JDK 17+（Spring Boot 3 最低要求 17）
-- Maven 3.6+
-- Node.js 16+（建议 18/20）
-
-## 后端启动
-
-```bash
+```powershell
+$env:KUNLUN_ADMIN_TOKEN='请设置足够长的管理令牌'
 cd backend
 mvn spring-boot:run
 ```
 
-启动后监听 `http://localhost:8080`，可直接验证接口：
-
-```
-curl http://localhost:8080/api/health/all
-curl http://localhost:8080/api/health/mysql
-curl http://localhost:8080/api/health/redis
-curl http://localhost:8080/api/health/rabbitmq
-curl http://localhost:8080/api/health/minio
-```
-
-## 前端启动
-
-```bash
+```powershell
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-打开 `http://localhost:5173`，点「测试全部」或逐项点「测试」即可。
+访问 `http://localhost:5173`。平台数据默认保存在项目根目录的 `.kunlun-builder`。生产环境建议额外设置 Base64 编码的 32 字节 `KUNLUN_SECRET_KEY`；未设置时平台会在数据目录首次生成 `master.key`，该文件丢失后已有密文将无法恢复。
 
-## 中间件连接配置
+### 容器启动
 
-| 组件 | 地址 | 账号 | 密码 | 说明 |
-|---|---|---|---|---|
-| MySQL | 192.168.149.128:3306 | root | mrlu | 未指定库，仅做连通性验证 |
-| Redis | 192.168.149.128:6379 | — | mrlu | |
-| RabbitMQ | 192.168.149.128:5672 | admin | mrlu | |
-| MinIO | 192.168.149.128:9000 | mrlu | mrlumrlu | bucket `demo-bucket` |
+```powershell
+$env:KUNLUN_ADMIN_TOKEN='请设置足够长的管理令牌'
+docker compose -f compose.platform.yml up -d --build
+```
 
-以上都在 `backend/src/main/resources/application.yml` 中，按需修改。
+访问 `http://localhost:8088`。平台后端为了执行镜像构建会挂载 Docker Socket，这等同于主机级构建权限，只能部署在受控构建机，不能直接暴露到公网。代码仓库或额外离线介质目录需要挂载到后端容器后，再填写容器内路径。
 
-## 注意事项
+### 推荐使用顺序
 
-1. **中文路径 + npm**：本机 `npm` 在包含中文的路径下会失败。当前工作目录 `E:\个人实战\...` 含中文，
-   `frontend/` 目录下的 `npm install` 大概率跑不通。**建议把整个 `frontend` 目录拷贝到纯 ASCII 路径再运行**，
-   例如 `C:\Users\cxy784853792\offline-demo-frontend`。后端 Maven 一般不受影响，但若遇编码问题同理处理。
-2. `.env` 里没有的内容、或改过密码，直接改 `application.yml` 即可。
-3. RabbitMQ 用的是非持久化队列 `demo.health.queue`，服务重启即消失，不影响反复测试。
+1. 在“项目与仓库”创建项目，配置 BACKEND 和 FRONTEND 仓库并执行分析。
+2. 在“部署配置”创建站点配置，使用页面为五类密码生成独立强密码。
+3. 在“离线制品库”导入 Docker Engine、Compose 和所需中间件 tar。
+4. 在“构建与交付”选择初始化包或应用更新包并提交任务。
+5. 构建成功后下载 `.tar.gz`，同时保存页面显示的 SHA256。
+
+应用更新包不会修改中间件账号密码。修改部署配置密码属于凭据轮换，必须通过独立运维流程同步修改已经运行的中间件。
+
+---
+
+本项目用于在无外网的 Kylin Linux `x86_64` 服务器上部署 Spring Boot、Vue、MySQL、Redis、RabbitMQ 和 MinIO。
+
+从 `1.1.1` 开始采用简化目录：中间件安装一次并长期固定，后续版本只更新 backend、frontend 和必要的数据库迁移，不再使用 `packages/releases/current/state`，也不再使用运行时 `kunlun.env`。
+
+> 状态说明：`1.1.1` 简化结构已经在 Kylin V10 `x86_64` 虚拟机完成核心手工部署。Docker、六镜像、双 Compose、中间件健康和应用启动均通过；首次备份、恢复演练及新增一键初始化脚本的全新机器复验仍待完成。
+
+## 文档入口
+
+- [部署总则](部署手册.md)
+- [1.1.1 目录与配置规划](docs/目录规划.md)
+- [V1：首次手工部署](docs/V1-手工版.md)
+- [1.1.1 手工部署实测记录](docs/1.1.1-手工部署实测记录.md)
+- [应用与数据库手工升级](docs/应用升级手工版.md)
+- [1.1.0 历史实测记录](docs/V1-实测记录.md)
+- [V2：脚本化部署规划](docs/V2-脚本版.md)
+
+## 最终运行模型
+
+```text
+/opt/Kunlun
+├── docker/          # Docker 离线安装介质和 data-root
+├── middleware/      # 固定的四个中间件、镜像 tar 和持久化数据
+├── application/     # 当前应用 Compose 和分版本应用镜像 tar
+├── database/        # 首次初始化 SQL 和分版本迁移 SQL
+├── scripts/         # 启停、检查、备份和恢复脚本
+├── backups/
+├── logs/
+└── tmp/
+```
+
+实际运行只有两个 Compose 项目：
+
+- `/opt/Kunlun/middleware/compose.middleware.yml`：MySQL、Redis、RabbitMQ、MinIO。
+- `/opt/Kunlun/application/compose.app.yml`：backend、frontend。
+
+两套 Compose 使用外部网络 `kunlun-net`。backend 通过 Docker DNS 访问 `mysql:3306`、`redis:6379`、`rabbitmq:5672` 和 `minio:9000`。
+
+## 配置约定
+
+- 不再使用 `/opt/Kunlun/config/kunlun.env`。
+- 镜像、路径、端口、库名、账号和密码直接写入对应 Compose。
+- 中间件初始化凭据写在 `compose.middleware.yml`。
+- backend 必须取得相同连接凭据，因此 `compose.app.yml` 保存同一套凭据副本。
+- 两份 Compose 都是站点专用敏感文件，权限必须为 `root:root 0600`。
+- 包含两份 Compose 的离线 tar 同样属于敏感材料，不能进入公共仓库或跨站点复用。
+
+## 版本策略
+
+- `1.1.1` 是新的完整初始化包：Docker、四个中间件、backend、frontend、目录和文档全部包含。
+- `1.1.2` 及以后默认是应用更新包：只包含 backend/frontend 镜像、`compose.app.yml`、数据库迁移和校验文件。
+- 中间件版本和数据目录默认不随应用版本变化。
+- 数据库结构变化属于应用升级，必须在升级前备份并按版本执行迁移。

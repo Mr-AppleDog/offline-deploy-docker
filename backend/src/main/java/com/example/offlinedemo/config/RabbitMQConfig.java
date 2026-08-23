@@ -3,8 +3,10 @@ package com.example.offlinedemo.config;
 import org.springframework.amqp.core.Queue;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 @Configuration
+@ConditionalOnProperty(name = "kunlun.legacy-health.enabled", havingValue = "true")
 public class RabbitMQConfig {
 
     /** 演示用队列名 */

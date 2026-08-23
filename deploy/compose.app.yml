@@ -1,0 +1,80 @@
+name: kunlun-app
+
+# 必须与 compose.middleware.yml 保持一致；两份独立 Compose 不能共享 YAML anchor。
+x-kunlun-mysql-user: &kunlun-mysql-user "offline_app"
+x-kunlun-mysql-password: &kunlun-mysql-password "74ca8d6d5f9ae97f4b8200bac1c3ec881cf0a79854c353f6"
+x-kunlun-redis-password: &kunlun-redis-password "74ca8d6d5f9ae97f4b8200bac1c3ec881cf0a79854c353f6"
+x-kunlun-rabbitmq-user: &kunlun-rabbitmq-user "admin"
+x-kunlun-rabbitmq-password: &kunlun-rabbitmq-password "74ca8d6d5f9ae97f4b8200bac1c3ec881cf0a79854c353f6"
+x-kunlun-minio-user: &kunlun-minio-user "minioadmin"
+x-kunlun-minio-secret: &kunlun-minio-secret "74ca8d6d5f9ae97f4b8200bac1c3ec881cf0a79854c353f6"
+
+x-common: &common
+  platform: linux/amd64
+  pull_policy: never
+  restart: unless-stopped
+  networks:
+    - kunlun-net
+  logging:
+    driver: local
+    options:
+      max-size: 100m
+      max-file: "3"
+
+services:
+  backend:
+    <<: *common
+    image: offline-demo-backend:1.1.1
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/offline_demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: *kunlun-mysql-user
+      SPRING_DATASOURCE_PASSWORD: *kunlun-mysql-password
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: *kunlun-redis-password
+      SPRING_DATA_REDIS_DATABASE: 0
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: *kunlun-rabbitmq-user
+      SPRING_RABBITMQ_PASSWORD: *kunlun-rabbitmq-password
+      SPRING_RABBITMQ_VIRTUAL_HOST: /
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: *kunlun-minio-user
+      MINIO_SECRET_KEY: *kunlun-minio-secret
+      MINIO_BUCKET: demo-bucket
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx512m
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+    networks:
+      kunlun-net:
+        aliases:
+          - backend
+
+  frontend:
+    <<: *common
+    image: offline-demo-frontend:1.1.1
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - 80:80
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      kunlun-net:
+        aliases:
+          - frontend
+
+networks:
+  kunlun-net:
+    external: true
+    name: kunlun-net

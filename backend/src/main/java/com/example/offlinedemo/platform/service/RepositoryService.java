@@ -1,0 +1,144 @@
+package com.example.offlinedemo.platform.service;
+
+import com.example.offlinedemo.platform.domain.Models;
+import com.example.offlinedemo.platform.security.CryptoService;
+import com.example.offlinedemo.platform.store.PlatformStore;
+import com.example.offlinedemo.platform.util.CommandRunner;
+import com.example.offlinedemo.platform.util.FileSupport;
+import org.springframework.stereotype.Service;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+
+@Service
+public class RepositoryService {
+    private final PlatformStore store;
+    private final CryptoService crypto;
+    private final CommandRunner commands;
+
+    public RepositoryService(PlatformStore store, CryptoService crypto, CommandRunner commands) {
+        this.store = store;
+        this.crypto = crypto;
+        this.commands = commands;
+    }
+
+    public List<RepositorySnapshot> checkout(Models.Project project, String workspaceName,
+                                              Consumer<String> logger) throws Exception {
+        if (project.repositories == null || project.repositories.isEmpty()) {
+            throw new IllegalArgumentException("项目还没有配置代码仓库");
+        }
+        Path workspace = FileSupport.safeResolve(store.workspacesRoot(), workspaceName, "工作目录");
+        if (Files.exists(workspace)) FileSupport.deleteTree(store.workspacesRoot(), workspace);
+        Files.createDirectories(workspace);
+        List<RepositorySnapshot> result = new ArrayList<>();
+        try {
+            for (Models.RepositoryConfig repository : project.repositories) {
+                result.add(cloneOne(repository, workspace, logger));
+            }
+            return result;
+        } catch (Exception e) {
+            try { FileSupport.deleteTree(store.workspacesRoot(), workspace); } catch (IOException ignored) {}
+            throw e;
+        }
+    }
+
+    private RepositorySnapshot cloneOne(Models.RepositoryConfig repository, Path workspace,
+                                        Consumer<String> logger) throws Exception {
+        if (repository.url == null || repository.url.isBlank() || repository.url.startsWith("-")) {
+            throw new IllegalArgumentException("仓库地址无效：" + repository.role);
+        }
+        String safeRole = repository.role.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_-]", "-");
+        Path target = workspace.resolve(safeRole).normalize();
+        if (!target.startsWith(workspace)) throw new IllegalArgumentException("仓库角色目录非法");
+        Map<String, String> environment = credentialEnvironment(repository, workspace, safeRole);
+        try {
+            logger.accept("拉取 " + repository.role + " 仓库，目标引用：" + defaultValue(repository.ref, "HEAD"));
+            // --no-local 避免本地仓库克隆使用硬链接，把源仓库 .git 的只读 ACL 带入工作目录。
+            commands.run(List.of("git", "clone", "--no-checkout", "--no-local", "--", repository.url, target.toString()),
+                    workspace, environment, logger);
+
+            String requestedRef = defaultValue(repository.ref, "HEAD");
+            String resolvedRef = requestedRef;
+            try {
+                commands.run(List.of("git", "-C", target.toString(), "rev-parse", "--verify", requestedRef + "^{commit}"),
+                        workspace, environment, null);
+            } catch (CommandRunner.CommandFailedException first) {
+                resolvedRef = "origin/" + requestedRef;
+                commands.run(List.of("git", "-C", target.toString(), "rev-parse", "--verify", resolvedRef + "^{commit}"),
+                        workspace, environment, null);
+            }
+            commands.run(List.of("git", "-C", target.toString(), "checkout", "--detach", resolvedRef),
+                    workspace, environment, logger);
+            String commit = commands.run(List.of("git", "-C", target.toString(), "rev-parse", "HEAD"),
+                    workspace, environment, null).output().trim();
+
+            Path context = FileSupport.safeResolve(target, defaultValue(repository.subdirectory, "."), "仓库子目录");
+            if (!Files.isDirectory(context)) throw new IllegalArgumentException("仓库子目录不存在：" + repository.subdirectory);
+            logger.accept(repository.role + " 已锁定 Commit " + commit.substring(0, Math.min(12, commit.length())));
+            return new RepositorySnapshot(repository.role, target, context, commit, repository.dockerfile);
+        } finally {
+            cleanupCredentialFiles(environment);
+        }
+    }
+
+    private Map<String, String> credentialEnvironment(Models.RepositoryConfig repository, Path workspace,
+                                                       String safeRole) throws IOException {
+        Map<String, String> environment = new HashMap<>();
+        environment.put("GIT_TERMINAL_PROMPT", "0");
+        if ("HTTPS".equalsIgnoreCase(repository.authType)) {
+            String secret = crypto.decrypt(repository.secretCipher);
+            if (secret.isBlank()) throw new IllegalArgumentException("HTTPS 仓库没有配置 Token/密码");
+            Path askPass;
+            if (System.getProperty("os.name").toLowerCase().contains("win")) {
+                askPass = workspace.resolve("askpass-" + safeRole + ".cmd");
+                Files.writeString(askPass,
+                        "@echo off\r\npowershell -NoProfile -Command \"if ($args[0] -match 'Username') { [Console]::Out.Write($env:GIT_KUNLUN_USERNAME) } else { [Console]::Out.Write($env:GIT_KUNLUN_SECRET) }\" %1\r\n",
+                        StandardCharsets.US_ASCII);
+            } else {
+                askPass = workspace.resolve("askpass-" + safeRole + ".sh");
+                Files.writeString(askPass,
+                        "#!/usr/bin/env sh\ncase \"$1\" in *Username*) printf '%s' \"$GIT_KUNLUN_USERNAME\" ;; *) printf '%s' \"$GIT_KUNLUN_SECRET\" ;; esac\n",
+                        StandardCharsets.US_ASCII);
+                askPass.toFile().setExecutable(true, true);
+            }
+            environment.put("GIT_ASKPASS", askPass.toString());
+            environment.put("GIT_KUNLUN_USERNAME", defaultValue(repository.username, "oauth2"));
+            environment.put("GIT_KUNLUN_SECRET", secret);
+            environment.put("KUNLUN_ASKPASS_FILE", askPass.toString());
+        } else if ("SSH".equalsIgnoreCase(repository.authType)) {
+            String privateKey = crypto.decrypt(repository.secretCipher);
+            if (privateKey.isBlank()) throw new IllegalArgumentException("SSH 仓库没有配置私钥");
+            Path keyFile = workspace.resolve("ssh-key-" + safeRole);
+            Files.writeString(keyFile, privateKey, StandardCharsets.UTF_8);
+            keyFile.toFile().setReadable(false, false);
+            keyFile.toFile().setReadable(true, true);
+            environment.put("GIT_SSH_COMMAND", "ssh -i \"" + keyFile.toString().replace('\\', '/')
+                    + "\" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new");
+            environment.put("KUNLUN_SSH_KEY_FILE", keyFile.toString());
+        }
+        return environment;
+    }
+
+    private void cleanupCredentialFiles(Map<String, String> environment) {
+        for (String name : List.of("KUNLUN_ASKPASS_FILE", "KUNLUN_SSH_KEY_FILE")) {
+            String value = environment.get(name);
+            if (value != null) {
+                try { Files.deleteIfExists(Path.of(value)); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    private String defaultValue(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value.trim();
+    }
+
+    public record RepositorySnapshot(String role, Path repositoryRoot, Path contextRoot,
+                                     String commit, String dockerfile) {}
+}

@@ -5,18 +5,26 @@ import com.example.offlinedemo.service.HealthService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.util.List;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/health")
+@ConditionalOnProperty(name = "kunlun.legacy-health.enabled", havingValue = "true")
 public class HealthController {
 
     private final HealthService healthService;
 
     public HealthController(HealthService healthService) {
         this.healthService = healthService;
+    }
+
+    /** 仅验证后端进程存活，不访问中间件，供容器 healthcheck 使用。 */
+    @GetMapping("/live")
+    public Map<String, Object> live() {
+        return Map.of("ok", true);
     }
 
     /** 一次性检测全部中间件 */

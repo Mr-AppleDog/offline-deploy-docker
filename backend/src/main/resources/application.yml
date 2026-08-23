@@ -2,37 +2,56 @@ server:
   port: 8080
 
 spring:
-  # ---- MySQL（连线上 192.168.149.128:3306，未指定库，仅做连通性测试）----
+  application:
+    name: kunlun-package-studio
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.amqp.RabbitAutoConfiguration
+  # 运行时账号和密码只由 compose.app.yml 注入，应用镜像内不保留账号默认值。
   datasource:
-    url: jdbc:mysql://192.168.149.128:3306/?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
-    username: root
-    password: mrlu
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://mysql:3306/offline_demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${SPRING_DATASOURCE_USERNAME:}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
-  # ---- Redis ----
   data:
     redis:
-      host: 192.168.149.128
-      port: 6379
-      password: mrlu
-      database: 0
-      timeout: 3s
+      host: ${SPRING_DATA_REDIS_HOST:redis}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
+      database: ${SPRING_DATA_REDIS_DATABASE:0}
+      timeout: ${SPRING_DATA_REDIS_TIMEOUT:3s}
 
-  # ---- RabbitMQ ----
   rabbitmq:
-    host: 192.168.149.128
-    port: 5672
-    username: admin
-    password: mrlu
-    virtual-host: /
+    host: ${SPRING_RABBITMQ_HOST:rabbitmq}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:}
+    password: ${SPRING_RABBITMQ_PASSWORD:}
+    virtual-host: ${SPRING_RABBITMQ_VIRTUAL_HOST:/}
 
-# ---- MinIO ----
 minio:
-  endpoint: http://192.168.149.128:9000
-  access-key: mrlu
-  secret-key: mrlumrlu
-  bucket: demo-bucket
+  endpoint: ${MINIO_ENDPOINT:http://minio:9000}
+  access-key: ${MINIO_ACCESS_KEY:}
+  secret-key: ${MINIO_SECRET_KEY:}
+  bucket: ${MINIO_BUCKET:demo-bucket}
 
 logging:
   level:
     root: info
+
+kunlun:
+  platform:
+    data-dir: ${KUNLUN_PLATFORM_DATA_DIR:../.kunlun-builder}
+    project-root: ${KUNLUN_PROJECT_ROOT:..}
+    secret-key: ${KUNLUN_SECRET_KEY:}
+    admin-token: ${KUNLUN_ADMIN_TOKEN:}
+    max-analysis-files: ${KUNLUN_MAX_ANALYSIS_FILES:6000}
+    command-timeout-minutes: ${KUNLUN_COMMAND_TIMEOUT_MINUTES:60}
+  legacy-health:
+    enabled: false
+
+spring.servlet.multipart:
+  max-file-size: 20GB
+  max-request-size: 20GB

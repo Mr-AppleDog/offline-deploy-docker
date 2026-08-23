@@ -16,6 +16,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -25,6 +26,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 @Service
+@ConditionalOnProperty(name = "kunlun.legacy-health.enabled", havingValue = "true")
 public class HealthService {
 
     private final JdbcTemplate jdbcTemplate;

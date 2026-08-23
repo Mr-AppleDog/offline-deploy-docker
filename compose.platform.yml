@@ -1,0 +1,27 @@
+name: kunlun-package-studio
+
+services:
+  backend:
+    build:
+      context: ./backend
+    environment:
+      KUNLUN_PLATFORM_DATA_DIR: /data
+      KUNLUN_PROJECT_ROOT: /workspace
+      KUNLUN_ADMIN_TOKEN: ${KUNLUN_ADMIN_TOKEN:?请设置 KUNLUN_ADMIN_TOKEN}
+      KUNLUN_SECRET_KEY: ${KUNLUN_SECRET_KEY:-}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./.kunlun-builder:/data
+      - ./:/workspace:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - 8088:80
+    restart: unless-stopped
+

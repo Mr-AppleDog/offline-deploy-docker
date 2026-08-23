@@ -1,0 +1,8 @@
+{
+  "data-root": "/opt/Kunlun/docker/data",
+  "log-driver": "local",
+  "log-opts": {
+    "max-size": "100m",
+    "max-file": "3"
+  }
+}

@@ -1,0 +1,120 @@
+name: kunlun-middleware
+
+# 这是旧脚本兼容示例。Web 平台构建时会按部署配置生成独立账号密码并替换整份 Compose。
+# 实际交付文件是站点专属敏感文件，不得进入公共仓库或跨站点复用。
+x-kunlun-mysql-user: &kunlun-mysql-user "offline_app"
+x-kunlun-mysql-password: &kunlun-mysql-password "74ca8d6d5f9ae97f4b8200bac1c3ec881cf0a79854c353f6"
+x-kunlun-redis-password: &kunlun-redis-password "74ca8d6d5f9ae97f4b8200bac1c3ec881cf0a79854c353f6"
+x-kunlun-rabbitmq-user: &kunlun-rabbitmq-user "admin"
+x-kunlun-rabbitmq-password: &kunlun-rabbitmq-password "74ca8d6d5f9ae97f4b8200bac1c3ec881cf0a79854c353f6"
+x-kunlun-minio-user: &kunlun-minio-user "minioadmin"
+x-kunlun-minio-secret: &kunlun-minio-secret "74ca8d6d5f9ae97f4b8200bac1c3ec881cf0a79854c353f6"
+
+x-common: &common
+  platform: linux/amd64
+  pull_policy: never
+  restart: unless-stopped
+  networks:
+    - kunlun-net
+  logging:
+    driver: local
+    options:
+      max-size: 100m
+      max-file: "3"
+
+services:
+  mysql:
+    <<: *common
+    image: mysql:8.4.11
+    environment:
+      MYSQL_ROOT_PASSWORD: *kunlun-mysql-password
+      MYSQL_DATABASE: offline_demo
+      MYSQL_USER: *kunlun-mysql-user
+      MYSQL_PASSWORD: *kunlun-mysql-password
+      TZ: Asia/Shanghai
+    volumes:
+      - /opt/Kunlun/middleware/mysql/data:/var/lib/mysql:Z
+      - /opt/Kunlun/middleware/mysql/conf.d:/etc/mysql/conf.d:ro,Z
+      - /opt/Kunlun/middleware/mysql/init:/docker-entrypoint-initdb.d:ro,Z
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 40s
+    networks:
+      kunlun-net:
+        aliases:
+          - mysql
+
+  redis:
+    <<: *common
+    image: redis:8.2.8
+    environment:
+      REDIS_PASSWORD: *kunlun-redis-password
+      TZ: Asia/Shanghai
+    command: ["sh", "-ec", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+    volumes:
+      - /opt/Kunlun/middleware/redis/data:/data:Z
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      kunlun-net:
+        aliases:
+          - redis
+
+  rabbitmq:
+    <<: *common
+    image: rabbitmq:4.3.4-management
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: *kunlun-rabbitmq-user
+      RABBITMQ_DEFAULT_PASS: *kunlun-rabbitmq-password
+      RABBITMQ_DEFAULT_VHOST: /
+      TZ: Asia/Shanghai
+    ports:
+      - 127.0.0.1:15672:15672
+    volumes:
+      - /opt/Kunlun/middleware/rabbitmq/data:/var/lib/rabbitmq:Z
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 40s
+    networks:
+      kunlun-net:
+        aliases:
+          - rabbitmq
+
+  minio:
+    <<: *common
+    image: minio/minio:RELEASE.2025-07-18T21-56-31Z
+    environment:
+      MINIO_ROOT_USER: *kunlun-minio-user
+      MINIO_ROOT_PASSWORD: *kunlun-minio-secret
+      TZ: Asia/Shanghai
+    command: server /data --console-address ":9001"
+    ports:
+      - 127.0.0.1:9001:9001
+    volumes:
+      - /opt/Kunlun/middleware/minio/data:/data:Z
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+    networks:
+      kunlun-net:
+        aliases:
+          - minio
+
+networks:
+  kunlun-net:
+    external: true
+    name: kunlun-net
