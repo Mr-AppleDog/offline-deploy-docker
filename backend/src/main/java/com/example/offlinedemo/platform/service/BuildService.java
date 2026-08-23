@@ -50,21 +50,32 @@ public class BuildService {
             throw new IllegalArgumentException("包修订号必须使用 r1、r2 这类格式");
 
         List<String> artifactIds = input.artifactIds == null ? List.of() : List.copyOf(input.artifactIds);
+        Set<String> components = new LinkedHashSet<>();
+        for (String id : artifactIds) {
+            Models.Artifact artifact = store.artifact(id);
+            if (!target.ociPlatform().equals(artifact.architecture))
+                throw new IllegalArgumentException("制品 " + artifact.component + " " + artifact.version
+                        + " 架构为 " + artifact.architecture + "，与目标 " + target.ociPlatform() + " 不一致");
+            if (ArtifactService.APP_IMAGE_COMPONENTS.contains(artifact.component)
+                    && !input.targetVersion.equals(artifact.version))
+                throw new IllegalArgumentException("应用镜像制品 " + artifact.component + " 版本 " + artifact.version
+                        + " 必须与目标版本 " + input.targetVersion + " 一致（镜像名 <appKey>-<role>:<版本>）");
+            components.add(artifact.component);
+        }
         if ("BOOTSTRAP".equals(type)) {
-            Set<String> components = new LinkedHashSet<>();
-            for (String id : artifactIds) {
-                Models.Artifact artifact = store.artifact(id);
-                if (!target.ociPlatform().equals(artifact.architecture))
-                    throw new IllegalArgumentException("制品 " + artifact.component + " " + artifact.version
-                            + " 架构为 " + artifact.architecture + "，与目标 " + target.ociPlatform() + " 不一致");
-                components.add(artifact.component);
-            }
             Set<String> required = new LinkedHashSet<>();
             required.add("docker-engine");
             required.add("docker-compose");
+            required.addAll(ArtifactService.APP_IMAGE_COMPONENTS);
             for (Models.MiddlewareCredential mc : profile.middleware) required.add(mc.component);
-            if (!components.equals(required)) throw new IllegalArgumentException("初始化包必须且只能选择 Docker、Compose 以及部署配置中声明的每个中间件制品");
+            if (!components.equals(required)) throw new IllegalArgumentException("初始化包必须且只能选择 Docker、Compose、前后端应用镜像以及部署配置中声明的每个中间件制品");
             if (components.size() != artifactIds.size()) throw new IllegalArgumentException("同一个组件只能选择一个制品版本");
+        } else {
+            for (String role : scope) {
+                String appComponent = "app-" + role.toLowerCase(Locale.ROOT);
+                if (!components.contains(appComponent))
+                    throw new IllegalArgumentException("更新范围包含 " + role + "，但未选择对应的 " + appComponent + " 应用镜像制品");
+            }
         }
 
         Models.BuildSpec spec = new Models.BuildSpec();

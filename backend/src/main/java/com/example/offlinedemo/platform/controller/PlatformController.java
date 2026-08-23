@@ -129,6 +129,7 @@ public class PlatformController {
     @GetMapping("/artifacts/components")
     public Map<String, Object> artifactComponents() {
         List<String> components = new java.util.ArrayList<>(ArtifactService.INFRA_COMPONENTS);
+        components.addAll(ArtifactService.APP_IMAGE_COMPONENTS);
         catalog.all().forEach(entry -> components.add(entry.component));
         return Map.of("architecture", Models.ARCHITECTURE, "targets", Models.supportedTargetViews(),
                 "components", components);

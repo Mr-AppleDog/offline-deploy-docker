@@ -73,7 +73,6 @@ public class BuildWorker {
                 throw new IllegalStateException("部署配置在任务创建后已修改，请重新创建构建任务");
 
             commands.run(List.of("docker", "info"), projectRoot, this::discard);
-            commands.run(List.of("docker", "buildx", "version"), projectRoot, this::discard);
             Path deployScripts = projectRoot.resolve("deploy/scripts").normalize();
             if (!Files.isDirectory(deployScripts)) throw new IllegalStateException("找不到部署脚本目录：" + deployScripts);
 
@@ -88,15 +87,14 @@ public class BuildWorker {
                 store.updateBuild(taskId, value -> value.sourceCommits.put(snapshot.role(), snapshot.commit()));
             }
 
-            stage(taskId, "构建应用镜像", 24);
-            List<ImageRecord> imageRecords = new ArrayList<>();
-            for (String role : task.spec.updateScope) {
-                RepositoryService.RepositorySnapshot snapshot = byRole.get(role);
-                imageRecords.add(buildApplicationImage(task, project, snapshot, workspace));
-            }
-
             Map<String, Models.Artifact> selected = new LinkedHashMap<>();
             for (Models.Artifact artifact : artifacts.selected(task.spec.artifactIds)) selected.put(artifact.component, artifact);
+
+            stage(taskId, "加载应用镜像", 24);
+            List<ImageRecord> imageRecords = new ArrayList<>();
+            for (String role : task.spec.updateScope) {
+                imageRecords.add(loadApplicationArtifact(task, project, role, selected, workspace));
+            }
             if ("BOOTSTRAP".equals(task.packageType)) {
                 stage(taskId, "校验中间件镜像", 48);
                 for (String component : middlewareComponents(profile)) {
@@ -157,29 +155,23 @@ public class BuildWorker {
         }
     }
 
-    private ImageRecord buildApplicationImage(Models.BuildTask task, Models.Project project,
-                                               RepositoryService.RepositorySnapshot snapshot,
-                                               Path workspace) throws Exception {
+    /** 应用镜像改为从已导入的制品 tar 加载并校验，不再从源码 buildx 构建。 */
+    private ImageRecord loadApplicationArtifact(Models.BuildTask task, Models.Project project,
+                                                String role, Map<String, Models.Artifact> selected,
+                                                Path workspace) throws Exception {
         Models.BuildTarget target = targetOf(task);
-        String suffix = snapshot.role().toLowerCase(Locale.ROOT);
+        String suffix = role.toLowerCase(Locale.ROOT);
+        String component = "app-" + suffix;
+        Models.Artifact artifact = selected.get(component);
+        if (artifact == null) throw new IllegalArgumentException("缺少应用镜像制品：" + component
+                + "（请在离线制品库导入 app-" + suffix + " 制品）");
         String image = project.appKey + "-" + suffix + ":" + task.targetVersion;
-        Path dockerfile = FileSupport.safeResolve(snapshot.contextRoot(),
-                snapshot.dockerfile() == null || snapshot.dockerfile().isBlank() ? "Dockerfile" : snapshot.dockerfile(),
-                "Dockerfile");
-        if (!Files.isRegularFile(dockerfile)) throw new IllegalArgumentException("Dockerfile 不存在：" + dockerfile);
-        log(task.id, "构建镜像 " + image);
-        commands.run(List.of("docker", "buildx", "build", "--platform", target.ociPlatform(),
-                        "--load", "--label", "org.opencontainers.image.revision=" + snapshot.commit(),
-                        "--label", "org.opencontainers.image.version=" + task.targetVersion,
-                        "--tag", image, "--file", dockerfile.toString(), snapshot.contextRoot().toString()),
-                projectRoot, line -> log(task.id, line));
-        ImageIdentity identity = inspectImage(image, target);
-        Path imageDir = workspace.resolve("exports");
-        Files.createDirectories(imageDir);
-        Path tar = imageDir.resolve(project.appKey + "-" + suffix + "-" + task.targetVersion + "-" + target.packageSuffix() + ".tar");
-        commands.run(List.of("docker", "save", "--output", tar.toString(), image), projectRoot,
+        Path localTar = artifactLocal(artifact, workspace.resolve(".cache"));
+        log(task.id, "加载应用镜像 " + image + "（制品 " + artifact.fileName + "）");
+        commands.run(List.of("docker", "load", "--input", localTar.toString()), projectRoot,
                 line -> log(task.id, line));
-        return new ImageRecord(image, identity.id, target.ociPlatform(), null, FileSupport.sha256(tar), tar);
+        ImageIdentity identity = inspectImage(image, target);
+        return new ImageRecord(image, identity.id, target.ociPlatform(), null, artifact.sha256, localTar);
     }
 
     private PackageResult assemble(Models.BuildTask task, Models.Project project,

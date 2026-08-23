@@ -18,6 +18,8 @@ import java.util.UUID;
 @Service
 public class ArtifactService {
     public static final List<String> INFRA_COMPONENTS = List.of("docker-engine", "docker-compose");
+    /** 应用镜像制品：由用户在平台外构建并 save 成 tar 导入，平台不再从源码构建。 */
+    public static final List<String> APP_IMAGE_COMPONENTS = List.of("app-backend", "app-frontend");
     private final PlatformStore store;
     private final MiddlewareCatalog catalog;
     private final BlobStore blobStore;
@@ -33,7 +35,9 @@ public class ArtifactService {
 
     public Models.Artifact importFile(String component, String version, String sourcePath, String arch) throws Exception {
         String normalizedComponent = component == null ? "" : component.toLowerCase(Locale.ROOT);
-        if (!INFRA_COMPONENTS.contains(normalizedComponent) && !catalog.exists(normalizedComponent))
+        if (!INFRA_COMPONENTS.contains(normalizedComponent)
+                && !APP_IMAGE_COMPONENTS.contains(normalizedComponent)
+                && !catalog.exists(normalizedComponent))
             throw new IllegalArgumentException("不支持的制品组件：" + component);
         if (version == null || !version.matches("^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$"))
             throw new IllegalArgumentException("制品版本格式不正确");
@@ -46,7 +50,7 @@ public class ArtifactService {
         if ("docker-engine".equals(normalizedComponent) && !lowerName.endsWith(".tgz"))
             throw new IllegalArgumentException("Docker Engine 制品必须是 .tgz");
         if (!INFRA_COMPONENTS.contains(normalizedComponent) && !lowerName.endsWith(".tar"))
-            throw new IllegalArgumentException("中间件镜像制品必须是 docker save 生成的 .tar");
+            throw new IllegalArgumentException("镜像制品必须是 docker save 生成的 .tar");
 
         Models.Artifact artifact = new Models.Artifact();
         artifact.id = UUID.randomUUID().toString();

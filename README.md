@@ -2,14 +2,14 @@
 
 ## Web 离线交付平台
 
-当前项目已经从固定示例打包脚本扩展为可视化离线交付平台。平台运行在可访问代码仓库和 Docker Engine（含 Buildx）的受控构建机上，生成供无外网 Kylin V10 `amd64`/`arm64`（飞腾/鲲鹏）服务器使用的离线包。
+当前项目已经从固定示例打包脚本扩展为可视化离线交付平台。平台运行在可访问代码仓库和 Docker Engine 的受控构建机上（前后端应用镜像由用户在平台外构建并导入 tar，平台不再从源码构建），生成供无外网 Kylin V10 `amd64`/`arm64`（飞腾/鲲鹏）服务器使用的离线包。
 
 主要能力：
 
 - 项目以及前后端 Git 仓库配置，支持公开仓库、HTTPS Token、SSH 私钥和单仓库子目录；
 - 锁定实际 Commit，静态分析 Maven、Node、Compose、Dockerfile 和 SQL，识别中间件依赖；
 - **中间件注册表**：内置 MySQL、PostgreSQL、人大金仓 KingbaseES、达梦 DM8、瀚高 HighGo、MongoDB、Redis、RabbitMQ、Kafka、RocketMQ、Elasticsearch、MinIO、Nginx、东方通 TongWeb 等 14 类，新增中间件只需加一条目录定义，不写死代码；
-- **双架构目标**：Kylin V10 `amd64` 与 `arm64`，产物命名 `-kylin-v10-<arch>`，贯穿 buildx 构建、镜像 tar、Compose 平台与安装脚本校验；
+- **双架构目标**：Kylin V10 `amd64` 与 `arm64`，产物命名 `-kylin-v10-<arch>`，贯穿镜像 tar 导入、Compose 平台与安装脚本校验；
 - 管理 Docker、Compose 及各类中间件的离线制品（按架构分区）；
 - 按站点配置各中间件独立账号密码，使用 AES-GCM 加密持久化，页面和 API 不回显密文；
 - 异步串行构建，输出实时任务阶段、日志、manifest、镜像清单和 SHA256；
@@ -18,7 +18,7 @@
 
 ### 本地开发启动
 
-后端要求 JDK 17、Maven、Git、tar、Docker Engine 和 Buildx。前端要求 Node.js 20+。项目不需要也禁止使用 Anaconda。
+后端要求 JDK 17、Maven、Git、tar、Docker Engine。前端要求 Node.js 20+。项目不需要也禁止使用 Anaconda。
 
 ```powershell
 $env:KUNLUN_ADMIN_TOKEN='请设置足够长的管理令牌'
@@ -41,7 +41,7 @@ $env:KUNLUN_ADMIN_TOKEN='请设置足够长的管理令牌'
 docker compose -f compose.platform.yml up -d --build
 ```
 
-访问 `http://localhost:8088`。平台后端为了执行镜像构建会挂载 Docker Socket，这等同于主机级构建权限，只能部署在受控构建机，不能直接暴露到公网。代码仓库或额外离线介质目录需要挂载到后端容器后，再填写容器内路径。
+访问 `http://localhost:8088`。平台后端为了执行镜像 load/inspect 与 compose config 校验会挂载 Docker Socket，这等同于主机级权限，只能部署在受控构建机，不能直接暴露到公网。代码仓库或额外离线介质目录需要挂载到后端容器后，再填写容器内路径。
 
 ### 平台持久化（真实 MySQL + MinIO）
 
@@ -60,7 +60,7 @@ docker compose -f compose.platform.yml up -d --build
 
 1. 在“项目与仓库”创建项目，配置 BACKEND 和 FRONTEND 仓库并执行分析。
 2. 在“部署配置”创建站点配置，使用页面为五类密码生成独立强密码。
-3. 在“离线制品库”导入 Docker Engine、Compose 和所需中间件 tar。
+3. 在“离线制品库”导入 Docker Engine、Compose、所需中间件 tar，以及前后端应用镜像 tar（在平台外 build 后 `docker tag <appKey>-backend:<版本>` 再 `docker save`）。
 4. 在“构建与交付”选择初始化包或应用更新包并提交任务。
 5. 构建成功后下载 `.tar.gz`，同时保存页面显示的 SHA256。
 
