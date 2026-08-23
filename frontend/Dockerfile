@@ -3,6 +3,8 @@ ARG DOCKER_REGISTRY=docker.io
 FROM ${DOCKER_REGISTRY}/library/node:20.19-alpine3.22 AS build
 WORKDIR /app
 COPY package*.json ./
+# 国内构建机访问 registry.npmjs.org 极慢,换 npmmirror。
+RUN npm config set registry https://registry.npmmirror.com
 RUN npm ci
 COPY . .
 RUN npm run build

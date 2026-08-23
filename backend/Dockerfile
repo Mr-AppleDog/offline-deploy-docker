@@ -12,7 +12,9 @@ FROM ${DOCKER_REGISTRY}/library/eclipse-temurin:17-jre-alpine
 WORKDIR /app
 # 打包 Worker 需要访问 Git、SSH、Docker CLI、Buildx、Compose 和 tar。
 # 挂载 Docker Socket 等同于授予构建容器主机级权限，只能部署在受控构建机。
-RUN apk add --no-cache bash git openssh-client tar gzip docker-cli docker-cli-buildx docker-cli-compose \
+# 国内构建机访问 dl-cdn.alpinelinux.org 极慢,换阿里云 Alpine 镜像。
+RUN sed -i 's#https\?://dl-cdn.alpinelinux.org#https://mirrors.aliyun.com#g' /etc/apk/repositories \
+    && apk add --no-cache bash git openssh-client tar gzip docker-cli docker-cli-buildx docker-cli-compose \
     && mkdir -p /data /workspace
 COPY --from=build /build/target/*.jar /app/app.jar
 # 烘焙部署资源到 /workspace,使 BuildWorker 组装离线包时读得到 deploy/scripts、docs 等。
