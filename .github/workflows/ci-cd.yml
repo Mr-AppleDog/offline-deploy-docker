@@ -28,12 +28,17 @@ jobs:
 
       - name: 后端单元测试(门槛)
         run: |
+          # 以 runner 用户运行,避免 mvn 编译产物 backend/target/** 落盘为 root 属主,
+          # 否则下一次 checkout clean 会因权限不够失败。
+          mkdir -p /home/mrlu/.m2-kunlun
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v /home/mrlu/.m2-kunlun:/tmp/.m2 \
             -v "$PWD/backend":/ws \
-            -v kunlun-m2:/root/.m2 \
             -w /ws \
             maven:3.9-eclipse-temurin-17 \
-            mvn -B -q test
+            mvn -B -q -Dmaven.repo.local=/tmp/.m2/repository test
 
       - name: 构建后端镜像
         run: docker build -f backend/Dockerfile -t $BACKEND_IMAGE:${{ steps.tag.outputs.sha }} .
