@@ -55,24 +55,17 @@ validate_runtime_files() {
   ! grep -Fq '${' "$MIDDLEWARE_COMPOSE" || die "$MIDDLEWARE_COMPOSE 不得依赖运行时变量。"
   ! grep -Fq '${' "$APP_COMPOSE" || die "$APP_COMPOSE 不得依赖运行时变量。"
 
-  for key in \
-    x-kunlun-mysql-user x-kunlun-mysql-password \
-    x-kunlun-redis-password x-kunlun-rabbitmq-user \
-    x-kunlun-rabbitmq-password x-kunlun-minio-user \
-    x-kunlun-minio-secret
-  do
+  # 由两份 Compose 自动发现所有 x-kunlun-* 锚点并校验一致
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
     middleware_value="$(read_compose_anchor_value "$MIDDLEWARE_COMPOSE" "$key")"
     app_value="$(read_compose_anchor_value "$APP_COMPOSE" "$key")"
     [[ "$middleware_value" == "$app_value" ]] || die "两份 Compose 的 $key 不一致。"
-  done
 
-  for key in \
-    x-kunlun-mysql-password x-kunlun-redis-password \
-    x-kunlun-rabbitmq-password x-kunlun-minio-secret
-  do
-    middleware_value="$(read_compose_anchor_value "$MIDDLEWARE_COMPOSE" "$key")"
-    [[ ${#middleware_value} -ge 12 ]] || die "$key 长度不能少于 12 个字符。"
-  done
+    if [[ "$key" =~ -password$ || "$key" =~ -secret$ ]]; then
+      [[ ${#middleware_value} -ge 12 ]] || die "$key 长度不能少于 12 个字符。"
+    fi
+  done < <(grep -o '^x-kunlun-[a-zA-Z0-9-]*:' "$MIDDLEWARE_COMPOSE" | sed 's/:$//' | sort -u)
 }
 
 require_docker() {
@@ -97,4 +90,9 @@ compose_app() {
     --project-name "$APP_PROJECT" \
     --file "$APP_COMPOSE" \
     "$@"
+}
+
+# 运行时是否配置了某个中间件组件（依赖 $KUNLUN_ROOT/middleware.list）。
+component_configured() {
+  grep -qx "$1" "$KUNLUN_ROOT/middleware.list" || return 1
 }

@@ -1,0 +1,280 @@
+{
+  "components": [
+    {
+      "component": "mysql",
+      "displayName": "MySQL",
+      "category": "database",
+      "imageRepo": "mysql",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [
+        { "key": "rootPassword", "label": "root 密码", "secret": true, "required": true, "anchor": false, "envVar": "MYSQL_ROOT_PASSWORD" },
+        { "key": "database", "label": "数据库名", "secret": false, "required": true, "anchor": false, "envVar": "MYSQL_DATABASE", "defaultValue": "kunlun_app" },
+        { "key": "user", "label": "业务账号", "secret": false, "required": true, "anchor": true, "envVar": "MYSQL_USER", "defaultValue": "kunlun_app" },
+        { "key": "password", "label": "业务密码", "secret": true, "required": true, "anchor": true, "envVar": "MYSQL_PASSWORD" }
+      ],
+      "volumes": [
+        { "dir": "data", "container": "/var/lib/mysql" },
+        { "dir": "conf.d", "container": "/etc/mysql/conf.d", "flags": ":ro,Z" },
+        { "dir": "init", "container": "/docker-entrypoint-initdb.d", "flags": ":ro,Z" }
+      ],
+      "healthcheck": { "test": "[\"CMD-SHELL\", \"mysqladmin ping -h 127.0.0.1 -uroot -p\\\"$$MYSQL_ROOT_PASSWORD\\\" --silent\"]", "retries": 18, "startPeriod": "40s" },
+      "appConnections": [
+        { "env": "SPRING_DATASOURCE_URL", "template": "jdbc:mysql://mysql:3306/${database}?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=${timezone}&allowPublicKeyRetrieval=true" },
+        { "env": "SPRING_DATASOURCE_USERNAME", "credential": "user" },
+        { "env": "SPRING_DATASOURCE_PASSWORD", "credential": "password" }
+      ],
+      "backupStrategy": "mysqldump",
+      "backupCommand": "mysqldump -uroot -p\"$MYSQL_ROOT_PASSWORD\" --single-transaction --routines --events --triggers --all-databases"
+    },
+    {
+      "component": "postgresql",
+      "displayName": "PostgreSQL",
+      "category": "database",
+      "imageRepo": "postgres",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [
+        { "key": "database", "label": "数据库名", "secret": false, "required": true, "anchor": false, "envVar": "POSTGRES_DB", "defaultValue": "kunlun_app" },
+        { "key": "user", "label": "业务账号", "secret": false, "required": true, "anchor": true, "envVar": "POSTGRES_USER", "defaultValue": "postgres" },
+        { "key": "password", "label": "业务密码", "secret": true, "required": true, "anchor": true, "envVar": "POSTGRES_PASSWORD" }
+      ],
+      "volumes": [ { "dir": "data", "container": "/var/lib/postgresql/data" } ],
+      "healthcheck": { "test": "[\"CMD-SHELL\", \"pg_isready\"]", "startPeriod": "20s" },
+      "appConnections": [
+        { "env": "SPRING_DATASOURCE_URL", "template": "jdbc:postgresql://postgresql:5432/${database}" },
+        { "env": "SPRING_DATASOURCE_USERNAME", "credential": "user" },
+        { "env": "SPRING_DATASOURCE_PASSWORD", "credential": "password" }
+      ],
+      "backupStrategy": "pg-dump",
+      "backupCommand": "pg_dump -U postgres --clean --if-exists kupo"
+    },
+    {
+      "component": "kingbase",
+      "displayName": "人大金仓 KingbaseES",
+      "category": "database",
+      "imageRepo": "kingbase",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [
+        { "key": "database", "label": "数据库名", "secret": false, "required": true, "anchor": false, "envVar": "DB_NAME", "defaultValue": "kunlun_app" },
+        { "key": "user", "label": "业务账号", "secret": false, "required": true, "anchor": true, "envVar": "DB_USER", "defaultValue": "system" },
+        { "key": "password", "label": "业务密码", "secret": true, "required": true, "anchor": true, "envVar": "DB_PASSWORD" }
+      ],
+      "volumes": [ { "dir": "data", "container": "/home/kingbase/userdata" } ],
+      "healthcheck": { "test": "[\"CMD-SHELL\", \"ksql -U system -c 'select 1' >/dev/null 2>&1 || exit 1\"]", "retries": 18, "startPeriod": "60s" },
+      "appConnections": [
+        { "env": "SPRING_DATASOURCE_URL", "template": "jdbc:kingbase8://kingbase:54321/${database}" },
+        { "env": "SPRING_DATASOURCE_USERNAME", "credential": "user" },
+        { "env": "SPRING_DATASOURCE_PASSWORD", "credential": "password" }
+      ],
+      "backupStrategy": "cold-tar",
+      "notes": "需厂商离线镜像 tar（docker save），镜像名/端口以实际 tar 与官方文档为准；arm64 需厂商提供对应架构镜像。"
+    },
+    {
+      "component": "dameng",
+      "displayName": "达梦 DM8",
+      "category": "database",
+      "imageRepo": "dm8",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [
+        { "key": "database", "label": "数据库/实例名", "secret": false, "required": true, "anchor": false, "envVar": "DB_NAME", "defaultValue": "KUNLUN" },
+        { "key": "user", "label": "业务账号", "secret": false, "required": true, "anchor": true, "envVar": "DB_USER", "defaultValue": "SYSDBA" },
+        { "key": "password", "label": "业务密码", "secret": true, "required": true, "anchor": true, "envVar": "DB_PASSWORD" }
+      ],
+      "volumes": [ { "dir": "data", "container": "/opt/dmdbms/data" } ],
+      "healthcheck": { "test": "[\"CMD-SHELL\", \"disql -v >/dev/null 2>&1 || exit 1\"]", "retries": 18, "startPeriod": "60s" },
+      "appConnections": [
+        { "env": "SPRING_DATASOURCE_URL", "template": "jdbc:dm://dameng:5236/${database}" },
+        { "env": "SPRING_DATASOURCE_USERNAME", "credential": "user" },
+        { "env": "SPRING_DATASOURCE_PASSWORD", "credential": "password" }
+      ],
+      "backupStrategy": "cold-tar",
+      "notes": "需厂商离线镜像 tar；初始化依赖实例参数（页面大小/大小写敏感）需按项目要求定制。"
+    },
+    {
+      "component": "highgo",
+      "displayName": "瀚高 HighGo",
+      "category": "database",
+      "imageRepo": "highgo",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [
+        { "key": "database", "label": "数据库名", "secret": false, "required": true, "anchor": false, "envVar": "HG_DBNAME", "defaultValue": "highgo" },
+        { "key": "user", "label": "业务账号", "secret": false, "required": true, "anchor": true, "envVar": "HG_USERNAME", "defaultValue": "highgo" },
+        { "key": "password", "label": "业务密码", "secret": true, "required": true, "anchor": true, "envVar": "HG_PASSWORD" }
+      ],
+      "volumes": [ { "dir": "data", "container": "/opt/highgo/hgdb" } ],
+      "healthcheck": { "test": "[\"CMD-SHELL\", \"psql -U highgo -c 'select 1' >/dev/null 2>&1 || exit 1\"]", "startPeriod": "40s" },
+      "appConnections": [
+        { "env": "SPRING_DATASOURCE_URL", "template": "jdbc:postgresql://highgo:5866/${database}" },
+        { "env": "SPRING_DATASOURCE_USERNAME", "credential": "user" },
+        { "env": "SPRING_DATASOURCE_PASSWORD", "credential": "password" }
+      ],
+      "backupStrategy": "cold-tar",
+      "notes": "瀚高为 PG 衍生，JDBC 驱动与端口以官方为准。"
+    },
+    {
+      "component": "mongodb",
+      "displayName": "MongoDB",
+      "category": "database",
+      "imageRepo": "mongo",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [
+        { "key": "user", "label": "管理员账号", "secret": false, "required": true, "anchor": true, "envVar": "MONGO_INITDB_ROOT_USERNAME", "defaultValue": "root" },
+        { "key": "password", "label": "管理员密码", "secret": true, "required": true, "anchor": true, "envVar": "MONGO_INITDB_ROOT_PASSWORD" }
+      ],
+      "volumes": [ { "dir": "data", "container": "/data/db" } ],
+      "healthcheck": { "test": "[\"CMD\", \"mongosh\", \"--quiet\", \"--eval\", \"db.adminCommand({ping: 1}).ok\"]", "startPeriod": "20s" },
+      "appConnections": [
+        { "env": "SPRING_DATA_MONGODB_HOST", "literal": "mongodb" },
+        { "env": "SPRING_DATA_MONGODB_PORT", "literal": "27017" },
+        { "env": "SPRING_DATA_MONGODB_USERNAME", "credential": "user" },
+        { "env": "SPRING_DATA_MONGODB_PASSWORD", "credential": "password" }
+      ],
+      "backupStrategy": "cold-tar"
+    },
+    {
+      "component": "redis",
+      "displayName": "Redis",
+      "category": "cache",
+      "imageRepo": "redis",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [
+        { "key": "password", "label": "密码", "secret": true, "required": true, "anchor": true, "envVar": "REDIS_PASSWORD" },
+        { "key": "database", "label": "数据库", "secret": false, "required": false, "anchor": false, "defaultValue": "0" }
+      ],
+      "volumes": [ { "dir": "data", "container": "/data" } ],
+      "extraService": { "command": "[\"sh\", \"-ec\", \"exec redis-server --requirepass \\\"$$REDIS_PASSWORD\\\" --appendonly yes\"]" },
+      "healthcheck": { "test": "[\"CMD-SHELL\", \"redis-cli --no-auth-warning -a \\\"$$REDIS_PASSWORD\\\" ping | grep -q PONG\"]", "retries": 12 },
+      "appConnections": [
+        { "env": "SPRING_DATA_REDIS_HOST", "literal": "redis" },
+        { "env": "SPRING_DATA_REDIS_PORT", "literal": "6379" },
+        { "env": "SPRING_DATA_REDIS_PASSWORD", "credential": "password" },
+        { "env": "SPRING_DATA_REDIS_DATABASE", "credential": "database", "quote": false }
+      ],
+      "backupStrategy": "rdb-save",
+      "backupCommand": "SAVE"
+    },
+    {
+      "component": "rabbitmq",
+      "displayName": "RabbitMQ",
+      "category": "mq",
+      "imageRepo": "rabbitmq",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [
+        { "key": "user", "label": "账号", "secret": false, "required": true, "anchor": true, "envVar": "RABBITMQ_DEFAULT_USER", "defaultValue": "kunlun_app" },
+        { "key": "password", "label": "密码", "secret": true, "required": true, "anchor": true, "envVar": "RABBITMQ_DEFAULT_PASS" },
+        { "key": "vhost", "label": "Virtual Host", "secret": false, "required": false, "anchor": false, "envVar": "RABBITMQ_DEFAULT_VHOST", "defaultValue": "/" }
+      ],
+      "volumes": [ { "dir": "data", "container": "/var/lib/rabbitmq" } ],
+      "ports": "[127.0.0.1:15672:15672]",
+      "extraService": { "hostname": "rabbitmq" },
+      "healthcheck": { "test": "[\"CMD\", \"rabbitmq-diagnostics\", \"-q\", \"ping\"]", "timeout": "10s", "retries": 18, "startPeriod": "40s" },
+      "appConnections": [
+        { "env": "SPRING_RABBITMQ_HOST", "literal": "rabbitmq" },
+        { "env": "SPRING_RABBITMQ_PORT", "literal": "5672" },
+        { "env": "SPRING_RABBITMQ_USERNAME", "credential": "user" },
+        { "env": "SPRING_RABBITMQ_PASSWORD", "credential": "password" },
+        { "env": "SPRING_RABBITMQ_VIRTUAL_HOST", "credential": "vhost" }
+      ],
+      "backupStrategy": "export-definitions",
+      "backupCommand": "rabbitmqadmin export definitions.json"
+    },
+    {
+      "component": "kafka",
+      "displayName": "Kafka",
+      "category": "mq",
+      "imageRepo": "apache/kafka",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [],
+      "volumes": [ { "dir": "data", "container": "/var/lib/kafka/data" } ],
+      "ports": "[127.0.0.1:9092:9092]",
+      "healthcheck": { "test": "[\"CMD-SHELL\", \"/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1\"]", "startPeriod": "40s" },
+      "appConnections": [
+        { "env": "SPRING_KAFKA_BOOTSTRAP_SERVERS", "literal": "kafka:9092" }
+      ],
+      "backupStrategy": "cold-tar",
+      "notes": "单节点 KRaft 与 SASL 需额外 environment / command 定制，建议在厂商或团队镜像基础上固化。"
+    },
+    {
+      "component": "rocketmq",
+      "displayName": "RocketMQ",
+      "category": "mq",
+      "imageRepo": "apache/rocketmq",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [],
+      "volumes": [ { "dir": "data", "container": "/home/rocketmq/store" } ],
+      "ports": "[127.0.0.1:9876:9876]",
+      "healthcheck": { "test": "[\"CMD-SHELL\", \"sh /home/rocketmq/rocketmq-*/bin/mqadmin clusterList -n localhost:9876 >/dev/null 2>&1\"]", "startPeriod": "40s" },
+      "appConnections": [
+        { "env": "ROCKETMQ_NAME_SERVER", "literal": "rocketmq:9876" }
+      ],
+      "backupStrategy": "cold-tar",
+      "notes": "NameServer + Broker 双进程，通常拆分为两个 service；此条目为占位模板。"
+    },
+    {
+      "component": "elasticsearch",
+      "displayName": "Elasticsearch",
+      "category": "search",
+      "imageRepo": "elasticsearch",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [],
+      "volumes": [ { "dir": "data", "container": "/usr/share/elasticsearch/data" } ],
+      "ports": "[127.0.0.1:9200:9200]",
+      "healthcheck": { "test": "[\"CMD-SHELL\", \"curl -fsS http://localhost:9200/_cluster/health || exit 1\"]", "startPeriod": "40s" },
+      "appConnections": [
+        { "env": "SPRING_ELASTICSEARCH_URIS", "literal": "http://elasticsearch:9200" }
+      ],
+      "backupStrategy": "cold-tar",
+      "notes": "8.x 安全默认开启，需固定 xpack 安全配置。"
+    },
+    {
+      "component": "minio",
+      "displayName": "MinIO",
+      "category": "storage",
+      "imageRepo": "minio/minio",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [
+        { "key": "user", "label": "Access Key", "secret": false, "required": true, "anchor": true, "envVar": "MINIO_ROOT_USER", "defaultValue": "kunlunadmin" },
+        { "key": "secret", "label": "Secret Key", "secret": true, "required": true, "anchor": true, "envVar": "MINIO_ROOT_PASSWORD" },
+        { "key": "bucket", "label": "默认 Bucket", "secret": false, "required": false, "anchor": false, "defaultValue": "kunlun-app" }
+      ],
+      "volumes": [ { "dir": "data", "container": "/data" } ],
+      "ports": "[127.0.0.1:9001:9001]",
+      "extraService": { "command": "server /data --console-address \":9001\"" },
+      "healthcheck": { "test": "[\"CMD\", \"mc\", \"ready\", \"local\"]", "retries": 18, "startPeriod": "20s" },
+      "appConnections": [
+        { "env": "MINIO_ENDPOINT", "literal": "http://minio:9000" },
+        { "env": "MINIO_ACCESS_KEY", "credential": "user" },
+        { "env": "MINIO_SECRET_KEY", "credential": "secret" },
+        { "env": "MINIO_BUCKET", "credential": "bucket" }
+      ],
+      "backupStrategy": "cold-tar"
+    },
+    {
+      "component": "nginx",
+      "displayName": "Nginx",
+      "category": "web",
+      "imageRepo": "nginx",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [],
+      "volumes": [ { "dir": "conf.d", "container": "/etc/nginx/conf.d", "flags": ":ro,Z" }, { "dir": "html", "container": "/usr/share/nginx/html", "flags": ":ro,Z" } ],
+      "ports": "[127.0.0.1:8080:80]",
+      "healthcheck": { "test": "[\"CMD-SHELL\", \"wget -q -O /dev/null http://127.0.0.1/ || exit 1\"]" },
+      "backupStrategy": "cold-tar"
+    },
+    {
+      "component": "tongweb",
+      "displayName": "东方通 TongWeb",
+      "category": "appserver",
+      "imageRepo": "tongweb",
+      "architectures": ["amd64", "arm64"],
+      "credentials": [
+        { "key": "user", "label": "管理账号", "secret": false, "required": true, "anchor": true, "envVar": "TONGWEB_ADMIN_USER", "defaultValue": "admin" },
+        { "key": "password", "label": "管理密码", "secret": true, "required": true, "anchor": true, "envVar": "TONGWEB_ADMIN_PASSWORD" }
+      ],
+      "volumes": [ { "dir": "deployments", "container": "/opt/tongweb/domains" } ],
+      "ports": "[127.0.0.1:9060:9060]",
+      "healthcheck": { "test": "[\"CMD-SHELL\", \"curl -fsS http://localhost:9060/console >/dev/null 2>&1 || exit 1\"]", "startPeriod": "60s" },
+      "backupStrategy": "cold-tar",
+      "notes": "需厂商离线镜像 tar；控制台端口与管理凭据以官方为准。"
+    }
+  ]
+}

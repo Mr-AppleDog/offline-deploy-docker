@@ -1,7 +1,10 @@
 package com.example.offlinedemo.platform.service;
 
+import com.example.offlinedemo.platform.catalog.CatalogEntry;
+import com.example.offlinedemo.platform.catalog.MiddlewareCatalog;
 import com.example.offlinedemo.platform.config.PlatformProperties;
 import com.example.offlinedemo.platform.domain.Models;
+import com.example.offlinedemo.platform.store.BlobStore;
 import com.example.offlinedemo.platform.store.PlatformStore;
 import com.example.offlinedemo.platform.util.CommandRunner;
 import com.example.offlinedemo.platform.util.FileSupport;
@@ -30,18 +33,23 @@ public class BuildWorker {
     private final ArtifactService artifacts;
     private final RepositoryService repositories;
     private final ComposeRenderer composeRenderer;
+    private final MiddlewareCatalog catalog;
+    private final BlobStore blobStore;
     private final CommandRunner commands;
     private final ObjectMapper objectMapper;
     private final Path projectRoot;
 
     public BuildWorker(PlatformStore store, ProfileService profiles, ArtifactService artifacts,
                        RepositoryService repositories, ComposeRenderer composeRenderer,
+                       MiddlewareCatalog catalog, BlobStore blobStore,
                        CommandRunner commands, ObjectMapper objectMapper, PlatformProperties properties) {
         this.store = store;
         this.profiles = profiles;
         this.artifacts = artifacts;
         this.repositories = repositories;
         this.composeRenderer = composeRenderer;
+        this.catalog = catalog;
+        this.blobStore = blobStore;
         this.commands = commands;
         this.objectMapper = objectMapper.copy().findAndRegisterModules();
         this.projectRoot = properties.projectRootPath().toAbsolutePath().normalize();
@@ -51,13 +59,14 @@ public class BuildWorker {
         Path workspace = null;
         try {
             Models.BuildTask task = store.build(taskId);
+            Models.BuildTarget target = targetOf(task);
             store.updateBuild(taskId, value -> {
                 value.status = "RUNNING";
                 value.stage = "构建环境预检查";
                 value.progress = 3;
                 value.startedAt = Instant.now();
             });
-            log(taskId, "开始构建 " + task.packageType + "，目标架构 linux/amd64");
+            log(taskId, "开始构建 " + task.packageType + "，目标 " + target.description() + "（" + target.ociPlatform() + "）");
             Models.Project project = store.project(task.projectId);
             ProfileService.ResolvedProfile profile = profiles.resolve(task.profileId);
             if (profile.profile().revision != task.spec.profileRevision)
@@ -90,14 +99,16 @@ public class BuildWorker {
             for (Models.Artifact artifact : artifacts.selected(task.spec.artifactIds)) selected.put(artifact.component, artifact);
             if ("BOOTSTRAP".equals(task.packageType)) {
                 stage(taskId, "校验中间件镜像", 48);
-                for (String component : List.of("mysql", "redis", "rabbitmq", "minio")) {
+                for (String component : middlewareComponents(profile)) {
+                    CatalogEntry entry = catalog.entry(component);
                     Models.Artifact artifact = selected.get(component);
-                    commands.run(List.of("docker", "load", "--input", artifact.storagePath), projectRoot,
+                    Path localTar = artifactLocal(artifact, workspace.resolve(".cache"));
+                    commands.run(List.of("docker", "load", "--input", localTar.toString()), projectRoot,
                             line -> log(taskId, line));
-                    String image = middlewareImage(component, artifact.version);
-                    ImageIdentity identity = inspectImage(image);
-                    imageRecords.add(new ImageRecord(image, identity.id, Models.ARCHITECTURE,
-                            null, artifact.sha256, Path.of(artifact.storagePath)));
+                    String image = entry.imageRepo + ":" + artifact.version;
+                    ImageIdentity identity = inspectImage(image, target);
+                    imageRecords.add(new ImageRecord(image, identity.id, target.ociPlatform(),
+                            null, artifact.sha256, localTar));
                 }
             }
 
@@ -115,12 +126,17 @@ public class BuildWorker {
                     archiveHash + "  " + packageResult.archive.getFileName() + System.lineSeparator(), StandardCharsets.US_ASCII);
 
             stage(taskId, "交付物自检完成", 100);
+            BlobStore.BlobRef deliveryRef = blobStore.remote()
+                    ? blobStore.put(packageResult.archive, "deliveries/" + project.appKey + "/" + task.targetVersion + "/" + packageResult.archive.getFileName())
+                    : BlobStore.BlobRef.local(packageResult.archive);
             store.updateBuild(taskId, value -> {
                 value.status = "SUCCEEDED";
                 value.stage = "构建成功";
                 value.progress = 100;
                 value.artifactPath = packageResult.archive.toString();
                 value.artifactName = packageResult.archive.getFileName().toString();
+                value.artifactStoreType = deliveryRef.storeType();
+                value.artifactObjectKey = "minio".equals(deliveryRef.storeType()) ? deliveryRef.ref() : null;
                 value.sha256 = archiveHash;
                 value.finishedAt = Instant.now();
             });
@@ -144,6 +160,7 @@ public class BuildWorker {
     private ImageRecord buildApplicationImage(Models.BuildTask task, Models.Project project,
                                                RepositoryService.RepositorySnapshot snapshot,
                                                Path workspace) throws Exception {
+        Models.BuildTarget target = targetOf(task);
         String suffix = snapshot.role().toLowerCase(Locale.ROOT);
         String image = project.appKey + "-" + suffix + ":" + task.targetVersion;
         Path dockerfile = FileSupport.safeResolve(snapshot.contextRoot(),
@@ -151,18 +168,18 @@ public class BuildWorker {
                 "Dockerfile");
         if (!Files.isRegularFile(dockerfile)) throw new IllegalArgumentException("Dockerfile 不存在：" + dockerfile);
         log(task.id, "构建镜像 " + image);
-        commands.run(List.of("docker", "buildx", "build", "--platform", Models.ARCHITECTURE,
+        commands.run(List.of("docker", "buildx", "build", "--platform", target.ociPlatform(),
                         "--load", "--label", "org.opencontainers.image.revision=" + snapshot.commit(),
                         "--label", "org.opencontainers.image.version=" + task.targetVersion,
                         "--tag", image, "--file", dockerfile.toString(), snapshot.contextRoot().toString()),
                 projectRoot, line -> log(task.id, line));
-        ImageIdentity identity = inspectImage(image);
+        ImageIdentity identity = inspectImage(image, target);
         Path imageDir = workspace.resolve("exports");
         Files.createDirectories(imageDir);
-        Path tar = imageDir.resolve(project.appKey + "-" + suffix + "-" + task.targetVersion + "-linux-amd64.tar");
+        Path tar = imageDir.resolve(project.appKey + "-" + suffix + "-" + task.targetVersion + "-" + target.packageSuffix() + ".tar");
         commands.run(List.of("docker", "save", "--output", tar.toString(), image), projectRoot,
                 line -> log(task.id, line));
-        return new ImageRecord(image, identity.id, Models.ARCHITECTURE, null, FileSupport.sha256(tar), tar);
+        return new ImageRecord(image, identity.id, target.ociPlatform(), null, FileSupport.sha256(tar), tar);
     }
 
     private PackageResult assemble(Models.BuildTask task, Models.Project project,
@@ -173,9 +190,11 @@ public class BuildWorker {
                                    Path workspace) throws Exception {
         String revision = task.spec.packageRevision == null || task.spec.packageRevision.isBlank()
                 ? "" : "-" + task.spec.packageRevision;
+        Models.BuildTarget target = targetOf(task);
+        List<CatalogEntry> catalogEntries = catalog.entriesFor(middlewareComponents(profile));
         String packageName = "BOOTSTRAP".equals(task.packageType)
-                ? "kunlun-bootstrap-" + task.targetVersion + revision + "-linux-amd64"
-                : "kunlun-app-update-" + task.targetVersion + "-linux-amd64";
+                ? "kunlun-bootstrap-" + task.targetVersion + revision + "-" + target.packageSuffix()
+                : "kunlun-app-update-" + task.targetVersion + "-" + target.packageSuffix();
         Path root = workspace.resolve(packageName);
         Files.createDirectories(root);
         Path application = root.resolve("application");
@@ -186,7 +205,7 @@ public class BuildWorker {
         String frontendVersion = frontendVersionChanged == 1 ? task.targetVersion : task.fromVersion;
         Files.writeString(application.resolve("compose.app.yml"),
                 composeRenderer.application(profile, project.appKey, backendVersion, frontendVersion,
-                        project.backendHealthPath, project.frontendHealthPath), StandardCharsets.UTF_8);
+                        project.backendHealthPath, project.frontendHealthPath, catalogEntries, target), StandardCharsets.UTF_8);
 
         Path appImageDir = application.resolve("images").resolve(task.targetVersion);
         Files.createDirectories(appImageDir);
@@ -203,21 +222,22 @@ public class BuildWorker {
             Files.createDirectories(root.resolve("database/init"));
             Files.createDirectories(root.resolve("database/migrations").resolve(task.targetVersion));
             Files.createDirectories(root.resolve("middleware"));
-            for (String component : List.of("mysql", "redis", "rabbitmq", "minio")) {
+            for (String component : middlewareComponents(profile)) {
                 Models.Artifact artifact = selected.get(component);
                 middlewareVersions.put(component, artifact.version);
                 Path imageDir = root.resolve("middleware").resolve(component).resolve("image");
                 Files.createDirectories(imageDir);
-                String name = component + "-" + artifact.version.replaceAll("[^A-Za-z0-9._+-]", "-") + "-linux-amd64.tar";
+                String name = component + "-" + artifact.version.replaceAll("[^A-Za-z0-9._+-]", "-") + "-" + target.packageSuffix() + ".tar";
                 Path destination = imageDir.resolve(name);
-                Files.copy(Path.of(artifact.storagePath), destination, StandardCopyOption.REPLACE_EXISTING);
+                Files.copy(artifactLocal(artifact, workspace.resolve(".cache")), destination, StandardCopyOption.REPLACE_EXISTING);
                 writeSideChecksum(destination, artifact.sha256);
-                records.stream().filter(record -> middlewareImage(component, artifact.version).equals(record.image))
+                records.stream().filter(record -> (catalog.entry(component).imageRepo + ":" + artifact.version).equals(record.image))
                         .findFirst().ifPresent(record -> record.relativeTar = root.relativize(destination).toString().replace('\\', '/'));
             }
             Files.writeString(root.resolve("middleware/compose.middleware.yml"),
-                    composeRenderer.middleware(profile, middlewareVersions), StandardCharsets.UTF_8);
-            copyDockerMedia(root, selected);
+                    composeRenderer.middleware(profile, catalogEntries, middlewareVersions, target), StandardCharsets.UTF_8);
+            writeMiddlewareSpec(root, profile);
+            copyDockerMedia(root, selected, target, workspace.resolve(".cache"));
             FileSupport.copyTree(projectRoot.resolve("deploy/scripts"), root.resolve("scripts"));
             parameterizeBootstrapInstaller(root.resolve("scripts/install-bootstrap.sh"), task, selected);
             copyIfExists(projectRoot.resolve("README.md"), root.resolve("README.md"));
@@ -235,6 +255,7 @@ public class BuildWorker {
             Files.createDirectories(root.resolve("scripts"));
             copyIfExists(projectRoot.resolve("deploy/scripts/common.sh"), root.resolve("scripts/common.sh"));
             copyIfExists(projectRoot.resolve("deploy/scripts/install-app-update.sh"), root.resolve("scripts/install-app-update.sh"));
+            parameterizeAppUpdateInstaller(root.resolve("scripts/install-app-update.sh"), target);
         }
 
         commands.run(List.of("docker", "compose", "-f", application.resolve("compose.app.yml").toString(),
@@ -254,16 +275,16 @@ public class BuildWorker {
         return new PackageResult(root, archive);
     }
 
-    private void copyDockerMedia(Path root, Map<String, Models.Artifact> selected) throws IOException {
+    private void copyDockerMedia(Path root, Map<String, Models.Artifact> selected, Models.BuildTarget target, Path cache) throws Exception {
         Models.Artifact engine = selected.get("docker-engine");
         Models.Artifact compose = selected.get("docker-compose");
         Path install = root.resolve("docker/install");
         Files.createDirectories(install);
         Path engineTarget = install.resolve("docker-" + engine.version + ".tgz");
-        Files.copy(Path.of(engine.storagePath), engineTarget, StandardCopyOption.REPLACE_EXISTING);
+        Files.copy(artifactLocal(engine, cache), engineTarget, StandardCopyOption.REPLACE_EXISTING);
         writeSideChecksum(engineTarget, engine.sha256);
-        Path composeTarget = install.resolve("docker-compose-linux-x86_64");
-        Files.copy(Path.of(compose.storagePath), composeTarget, StandardCopyOption.REPLACE_EXISTING);
+        Path composeTarget = install.resolve(target.composeBinary());
+        Files.copy(artifactLocal(compose, cache), composeTarget, StandardCopyOption.REPLACE_EXISTING);
         writeSideChecksum(composeTarget, compose.sha256);
         copyIfExists(projectRoot.resolve("deploy/docker/daemon.json"), install.resolve("daemon.json"));
         copyIfExists(projectRoot.resolve("deploy/systemd/docker.service"), install.resolve("docker.service"));
@@ -281,11 +302,22 @@ public class BuildWorker {
 
     private void parameterizeBootstrapInstaller(Path installer, Models.BuildTask task,
                                                 Map<String, Models.Artifact> selected) throws IOException {
+        Models.BuildTarget target = targetOf(task);
         String text = Files.readString(installer, StandardCharsets.UTF_8)
                 .replace("readonly REQUIRED_DOCKER_VERSION=29.7.0", "readonly REQUIRED_DOCKER_VERSION=" + selected.get("docker-engine").version)
                 .replace("readonly REQUIRED_COMPOSE_VERSION=5.4.0", "readonly REQUIRED_COMPOSE_VERSION=" + selected.get("docker-compose").version)
                 .replace("readonly APP_VERSION=1.1.1", "readonly APP_VERSION=" + task.targetVersion)
+                .replace("readonly REQUIRED_PLATFORM=linux/amd64", "readonly REQUIRED_PLATFORM=" + target.ociPlatform())
+                .replace("docker-compose-linux-x86_64", target.composeBinary())
+                .replace("[[ \"$(uname -m)\" == x86_64 ]] || die '目标机架构必须为 x86_64。'",
+                        "[[ \"$(uname -m)\" == " + target.unameArch() + " ]] || die '目标机架构必须为 " + target.unameArch() + "。'")
                 .replace("[[ \"$record_count\" -eq 6 ]]", "[[ \"$record_count\" -eq 6 ]]");
+        Files.writeString(installer, text, StandardCharsets.UTF_8);
+    }
+
+    private void parameterizeAppUpdateInstaller(Path installer, Models.BuildTarget target) throws IOException {
+        String text = Files.readString(installer, StandardCharsets.UTF_8)
+                .replace("linux/amd64", target.ociPlatform());
         Files.writeString(installer, text, StandardCharsets.UTF_8);
     }
 
@@ -300,7 +332,9 @@ public class BuildWorker {
             lines.add("TO_VERSION=" + task.targetVersion);
             lines.add("UPDATE_SCOPE=" + String.join(",", task.spec.updateScope));
         }
-        lines.add("TARGET_PLATFORM=" + Models.ARCHITECTURE);
+        lines.add("TARGET_PLATFORM=" + targetOf(task).ociPlatform());
+        lines.add("TARGET_OS=" + targetOf(task).os);
+        lines.add("TARGET_ARCH=" + targetOf(task).arch);
         lines.add("PROJECT_KEY=" + project.appKey);
         lines.add("DEPLOYMENT_PROFILE_ID=" + profile.profile().id);
         lines.add("DEPLOYMENT_PROFILE_REVISION=" + profile.profile().revision);
@@ -313,10 +347,32 @@ public class BuildWorker {
         if ("BOOTSTRAP".equals(task.packageType)) {
             lines.add("DOCKER_VERSION=" + selected.get("docker-engine").version);
             lines.add("COMPOSE_VERSION=" + selected.get("docker-compose").version);
-            for (String component : List.of("mysql", "redis", "rabbitmq", "minio"))
+            List<String> components = middlewareComponents(profile);
+            lines.add("MIDDLEWARE_COUNT=" + components.size());
+            lines.add("MIDDLEWARE_LIST=" + String.join(",", components));
+            for (String component : components)
                 lines.add(component.toUpperCase(Locale.ROOT) + "_VERSION=" + selected.get(component).version);
         }
         Files.write(root.resolve("manifest.env"), lines, StandardCharsets.US_ASCII);
+    }
+
+    private void writeMiddlewareSpec(Path root, ProfileService.ResolvedProfile profile) throws IOException {
+        List<CatalogEntry> entries = profile.selectedEntries(catalog);
+        Files.writeString(root.resolve("middleware.list"),
+                entries.stream().map(e -> e.component).collect(java.util.stream.Collectors.joining("\n")) + "\n",
+                StandardCharsets.UTF_8);
+        List<Map<String, Object>> spec = new ArrayList<>();
+        for (CatalogEntry e : entries) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("component", e.component);
+            m.put("imageRepo", e.imageRepo);
+            m.put("category", e.category);
+            m.put("backupStrategy", e.backupStrategy == null ? "" : e.backupStrategy);
+            m.put("backupCommand", e.backupCommand == null ? "" : e.backupCommand);
+            m.put("healthcheck", e.healthcheck.test);
+            spec.add(m);
+        }
+        objectMapper.writerWithDefaultPrettyPrinter().writeValue(root.resolve("middleware.spec.json").toFile(), spec);
     }
 
     private void writeImages(Path root, List<ImageRecord> records) throws IOException {
@@ -341,20 +397,30 @@ public class BuildWorker {
         Files.writeString(Path.of(file + ".sha256"), hash + "  " + file.getFileName() + System.lineSeparator(), StandardCharsets.US_ASCII);
     }
 
-    private ImageIdentity inspectImage(String image) throws Exception {
+    private ImageIdentity inspectImage(String image, Models.BuildTarget target) throws Exception {
         String output = commands.run(List.of("docker", "image", "inspect", "--format",
                 "{{.Id}}|{{.Os}}/{{.Architecture}}", image), projectRoot, this::discard).output().trim();
         String[] parts = output.split("\\|", 2);
-        if (parts.length != 2 || !Models.ARCHITECTURE.equals(parts[1]))
-            throw new IllegalStateException("镜像架构不是 linux/amd64：" + image + "（" + output + "）");
+        if (parts.length != 2 || !target.ociPlatform().equals(parts[1]))
+            throw new IllegalStateException("镜像架构不是 " + target.ociPlatform() + "：" + image + "（" + output + "）");
         return new ImageIdentity(parts[0], parts[1]);
     }
 
-    private String middlewareImage(String component, String version) {
-        return switch (component) {
-            case "minio" -> "minio/minio:" + version;
-            default -> component + ":" + version;
-        };
+    private static List<String> middlewareComponents(ProfileService.ResolvedProfile profile) {
+        return profile.profile().middleware.stream().map(mc -> mc.component).toList();
+    }
+
+    private Path artifactLocal(Models.Artifact artifact, Path cacheDir) throws Exception {
+        if ("minio".equals(artifact.storeType)) {
+            return blobStore.materialize(new BlobStore.BlobRef("minio", artifact.objectKey), artifact.fileName, cacheDir);
+        }
+        Path local = Path.of(artifact.storagePath);
+        if (!Files.isRegularFile(local)) throw new IllegalStateException("制品本地文件不存在：" + local);
+        return local;
+    }
+
+    private static Models.BuildTarget targetOf(Models.BuildTask task) {
+        return Models.BuildTarget.of(task.spec.targetOs, task.spec.targetArch).normalized();
     }
 
     private void stage(String taskId, String stage, int progress) {

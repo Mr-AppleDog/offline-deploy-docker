@@ -29,6 +29,7 @@ public class BuildService {
         Models.Project project = store.project(input.projectId);
         Models.DeploymentProfile profile = store.profile(input.profileId);
         if (project.analysis == null) throw new IllegalArgumentException("创建构建任务前必须完成仓库分析");
+        Models.BuildTarget target = Models.BuildTarget.of(input.targetOs, input.targetArch).normalized();
         String type = input.packageType == null ? "" : input.packageType.toUpperCase(Locale.ROOT);
         if (!List.of("BOOTSTRAP", "APP_UPDATE").contains(type)) throw new IllegalArgumentException("不支持的包类型");
         requireVersion(input.targetVersion, "目标版本");
@@ -51,9 +52,18 @@ public class BuildService {
         List<String> artifactIds = input.artifactIds == null ? List.of() : List.copyOf(input.artifactIds);
         if ("BOOTSTRAP".equals(type)) {
             Set<String> components = new LinkedHashSet<>();
-            for (String id : artifactIds) components.add(store.artifact(id).component);
-            Set<String> required = Set.of("docker-engine", "docker-compose", "mysql", "redis", "rabbitmq", "minio");
-            if (!components.equals(required)) throw new IllegalArgumentException("初始化包必须且只能选择 Docker、Compose 和四个中间件制品");
+            for (String id : artifactIds) {
+                Models.Artifact artifact = store.artifact(id);
+                if (!target.ociPlatform().equals(artifact.architecture))
+                    throw new IllegalArgumentException("制品 " + artifact.component + " " + artifact.version
+                            + " 架构为 " + artifact.architecture + "，与目标 " + target.ociPlatform() + " 不一致");
+                components.add(artifact.component);
+            }
+            Set<String> required = new LinkedHashSet<>();
+            required.add("docker-engine");
+            required.add("docker-compose");
+            for (Models.MiddlewareCredential mc : profile.middleware) required.add(mc.component);
+            if (!components.equals(required)) throw new IllegalArgumentException("初始化包必须且只能选择 Docker、Compose 以及部署配置中声明的每个中间件制品");
             if (components.size() != artifactIds.size()) throw new IllegalArgumentException("同一个组件只能选择一个制品版本");
         }
 
@@ -70,6 +80,8 @@ public class BuildService {
         spec.dbMigrationRequired = input.dbMigrationRequired;
         spec.databaseInitDirectory = clean(input.databaseInitDirectory);
         spec.databaseMigrationDirectory = clean(input.databaseMigrationDirectory);
+        spec.targetOs = target.os;
+        spec.targetArch = target.arch;
 
         Models.BuildTask task = new Models.BuildTask();
         task.id = UUID.randomUUID().toString();
@@ -119,5 +131,7 @@ public class BuildService {
         public boolean dbMigrationRequired;
         public String databaseInitDirectory;
         public String databaseMigrationDirectory;
+        public String targetOs;
+        public String targetArch;
     }
 }

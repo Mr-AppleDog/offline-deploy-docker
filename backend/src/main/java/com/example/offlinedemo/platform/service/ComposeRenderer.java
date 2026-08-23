@@ -1,197 +1,184 @@
 package com.example.offlinedemo.platform.service;
 
+import com.example.offlinedemo.platform.catalog.CatalogEntry;
 import com.example.offlinedemo.platform.domain.Models;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+/**
+ * 按中间件注册表（CatalogEntry）渲染两份 compose 文件。
+ * 版本来自制品，凭据来自已解密的 ResolvedProfile，平台来自 BuildTarget。
+ */
 @Service
 public class ComposeRenderer {
-    public String middleware(ProfileService.ResolvedProfile resolved, Map<String, String> versions) {
-        Models.DeploymentProfile p = resolved.profile();
-        return """
-                name: kunlun-middleware
+    private static final Pattern TEMPLATE = Pattern.compile("\\$\\{([A-Za-z0-9_]+)}");
 
-                # 由 Kunlun 离线交付平台生成。该文件含站点专属凭据，必须以 0600 保存。
-                x-kunlun-mysql-user: &kunlun-mysql-user %s
-                x-kunlun-mysql-password: &kunlun-mysql-password %s
-                x-kunlun-redis-password: &kunlun-redis-password %s
-                x-kunlun-rabbitmq-user: &kunlun-rabbitmq-user %s
-                x-kunlun-rabbitmq-password: &kunlun-rabbitmq-password %s
-                x-kunlun-minio-user: &kunlun-minio-user %s
-                x-kunlun-minio-secret: &kunlun-minio-secret %s
-
-                x-common: &common
-                  platform: linux/amd64
-                  pull_policy: never
-                  restart: unless-stopped
-                  networks: [kunlun-net]
-                  logging:
-                    driver: local
-                    options: { max-size: 100m, max-file: "3" }
-
-                services:
-                  mysql:
-                    <<: *common
-                    image: mysql:%s
-                    environment:
-                      MYSQL_ROOT_PASSWORD: %s
-                      MYSQL_DATABASE: %s
-                      MYSQL_USER: *kunlun-mysql-user
-                      MYSQL_PASSWORD: *kunlun-mysql-password
-                      TZ: %s
-                    volumes:
-                      - /opt/Kunlun/middleware/mysql/data:/var/lib/mysql:Z
-                      - /opt/Kunlun/middleware/mysql/conf.d:/etc/mysql/conf.d:ro,Z
-                      - /opt/Kunlun/middleware/mysql/init:/docker-entrypoint-initdb.d:ro,Z
-                    healthcheck:
-                      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
-                      interval: 10s
-                      timeout: 5s
-                      retries: 18
-                      start_period: 40s
-
-                  redis:
-                    <<: *common
-                    image: redis:%s
-                    environment:
-                      REDIS_PASSWORD: *kunlun-redis-password
-                      TZ: %s
-                    command: ["sh", "-ec", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
-                    volumes: [/opt/Kunlun/middleware/redis/data:/data:Z]
-                    healthcheck:
-                      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
-                      interval: 10s
-                      timeout: 5s
-                      retries: 12
-
-                  rabbitmq:
-                    <<: *common
-                    image: rabbitmq:%s
-                    hostname: rabbitmq
-                    environment:
-                      RABBITMQ_DEFAULT_USER: *kunlun-rabbitmq-user
-                      RABBITMQ_DEFAULT_PASS: *kunlun-rabbitmq-password
-                      RABBITMQ_DEFAULT_VHOST: %s
-                      TZ: %s
-                    ports: [127.0.0.1:15672:15672]
-                    volumes: [/opt/Kunlun/middleware/rabbitmq/data:/var/lib/rabbitmq:Z]
-                    healthcheck:
-                      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-                      interval: 10s
-                      timeout: 10s
-                      retries: 18
-                      start_period: 40s
-
-                  minio:
-                    <<: *common
-                    image: minio/minio:%s
-                    environment:
-                      MINIO_ROOT_USER: *kunlun-minio-user
-                      MINIO_ROOT_PASSWORD: *kunlun-minio-secret
-                      TZ: %s
-                    command: server /data --console-address ":9001"
-                    ports: [127.0.0.1:9001:9001]
-                    volumes: [/opt/Kunlun/middleware/minio/data:/data:Z]
-                    healthcheck:
-                      test: ["CMD", "mc", "ready", "local"]
-                      interval: 10s
-                      timeout: 5s
-                      retries: 18
-                      start_period: 20s
-
-                networks:
-                  kunlun-net:
-                    external: true
-                    name: kunlun-net
-                """.formatted(
-                yaml(p.mysqlUsername), yaml(resolved.mysqlPassword()), yaml(resolved.redisPassword()),
-                yaml(p.rabbitmqUsername), yaml(resolved.rabbitmqPassword()), yaml(p.minioAccessKey),
-                yaml(resolved.minioSecretKey()), version(versions, "mysql"), yaml(resolved.mysqlRootPassword()),
-                yaml(p.mysqlDatabase), yaml(p.timezone), version(versions, "redis"), yaml(p.timezone),
-                version(versions, "rabbitmq"), yaml(p.rabbitmqVhost), yaml(p.timezone),
-                version(versions, "minio"), yaml(p.timezone));
+    public String middleware(ProfileService.ResolvedProfile resolved, List<CatalogEntry> selected,
+                             Map<String, String> versions, Models.BuildTarget target) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("name: kunlun-middleware\n\n");
+        sb.append("# 由 Kunlun 离线交付平台生成。该文件含站点专属凭据，必须以 0600 保存。\n");
+        appendAnchors(sb, resolved, selected);
+        sb.append("\nx-common: &common\n");
+        appendCommon(sb, target.ociPlatform());
+        sb.append("\nservices:\n");
+        for (CatalogEntry entry : selected) {
+            appendService(sb, entry, resolved, version(versions, entry.component));
+        }
+        appendNetworks(sb);
+        return sb.toString();
     }
 
     public String application(ProfileService.ResolvedProfile resolved, String appKey,
                               String backendVersion, String frontendVersion,
-                              String backendHealthPath, String frontendHealthPath) {
-        Models.DeploymentProfile p = resolved.profile();
-        return """
-                name: kunlun-app
+                              String backendHealthPath, String frontendHealthPath,
+                              List<CatalogEntry> selected, Models.BuildTarget target) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("name: kunlun-app\n\n");
+        sb.append("# 由 Kunlun 离线交付平台生成。必须与在线 middleware Compose 的凭据一致。\n");
+        appendAnchors(sb, resolved, selected);
+        sb.append("\nx-common: &common\n");
+        appendCommon(sb, target.ociPlatform());
+        sb.append("\nservices:\n");
+        appendAppService(sb, resolved, selected, appKey, backendVersion, frontendVersion,
+                backendHealthPath, frontendHealthPath);
+        appendNetworks(sb);
+        return sb.toString();
+    }
 
-                # 由 Kunlun 离线交付平台生成。必须与在线 middleware Compose 的凭据一致。
-                x-kunlun-mysql-user: &kunlun-mysql-user %s
-                x-kunlun-mysql-password: &kunlun-mysql-password %s
-                x-kunlun-redis-password: &kunlun-redis-password %s
-                x-kunlun-rabbitmq-user: &kunlun-rabbitmq-user %s
-                x-kunlun-rabbitmq-password: &kunlun-rabbitmq-password %s
-                x-kunlun-minio-user: &kunlun-minio-user %s
-                x-kunlun-minio-secret: &kunlun-minio-secret %s
+    private void appendAnchors(StringBuilder sb, ProfileService.ResolvedProfile resolved,
+                               List<CatalogEntry> selected) {
+        for (CatalogEntry entry : selected) {
+            for (CatalogEntry.Credential cred : entry.credentials) {
+                if (!cred.anchor) continue;
+                sb.append(xKey(entry.component, cred.key)).append(": &").append(anchor(entry.component, cred.key))
+                        .append(' ').append(yaml(resolved.value(entry.component, cred.key))).append('\n');
+            }
+        }
+    }
 
-                x-common: &common
-                  platform: linux/amd64
-                  pull_policy: never
-                  restart: unless-stopped
-                  networks: [kunlun-net]
-                  logging:
-                    driver: local
-                    options: { max-size: 100m, max-file: "3" }
+    private void appendCommon(StringBuilder sb, String platform) {
+        sb.append("  platform: ").append(platform).append('\n')
+                .append("  pull_policy: never\n")
+                .append("  restart: unless-stopped\n")
+                .append("  networks: [kunlun-net]\n")
+                .append("  logging:\n")
+                .append("    driver: local\n")
+                .append("    options: { max-size: 100m, max-file: \"3\" }\n");
+    }
 
-                services:
-                  backend:
-                    <<: *common
-                    image: %s-backend:%s
-                    environment:
-                      SPRING_DATASOURCE_URL: %s
-                      SPRING_DATASOURCE_USERNAME: *kunlun-mysql-user
-                      SPRING_DATASOURCE_PASSWORD: *kunlun-mysql-password
-                      SPRING_DATA_REDIS_HOST: redis
-                      SPRING_DATA_REDIS_PORT: 6379
-                      SPRING_DATA_REDIS_PASSWORD: *kunlun-redis-password
-                      SPRING_DATA_REDIS_DATABASE: %d
-                      SPRING_RABBITMQ_HOST: rabbitmq
-                      SPRING_RABBITMQ_PORT: 5672
-                      SPRING_RABBITMQ_USERNAME: *kunlun-rabbitmq-user
-                      SPRING_RABBITMQ_PASSWORD: *kunlun-rabbitmq-password
-                      SPRING_RABBITMQ_VIRTUAL_HOST: %s
-                      MINIO_ENDPOINT: http://minio:9000
-                      MINIO_ACCESS_KEY: *kunlun-minio-user
-                      MINIO_SECRET_KEY: *kunlun-minio-secret
-                      MINIO_BUCKET: %s
-                      JAVA_TOOL_OPTIONS: %s
-                      TZ: %s
-                    healthcheck:
-                      test: ["CMD", "wget", "-q", "-O", "/dev/null", %s]
-                      interval: 10s
-                      timeout: 5s
-                      retries: 18
-                      start_period: 30s
+    private void appendService(StringBuilder sb, CatalogEntry entry, ProfileService.ResolvedProfile resolved,
+                               String version) {
+        sb.append("  ").append(entry.component).append(":\n");
+        sb.append("    <<: *common\n");
+        sb.append("    image: ").append(entry.imageRepo).append(':').append(version).append('\n');
+        if (entry.extraService.hostname != null && !entry.extraService.hostname.isBlank())
+            sb.append("    hostname: ").append(entry.extraService.hostname).append('\n');
+        if (entry.ports != null && !entry.ports.isBlank())
+            sb.append("    ports: ").append(entry.ports).append('\n');
+        sb.append("    environment:\n");
+        for (CatalogEntry.Credential cred : entry.credentials) {
+            if (cred.envVar == null || cred.envVar.isBlank()) continue;
+            String value = resolved.value(entry.component, cred.key);
+            if (cred.anchor) sb.append("      ").append(cred.envVar).append(": *").append(anchor(entry.component, cred.key)).append('\n');
+            else sb.append("      ").append(cred.envVar).append(": ").append(yaml(value)).append('\n');
+        }
+        sb.append("      TZ: ").append(yaml(resolved.profile().timezone)).append('\n');
+        if (entry.extraService.command != null && !entry.extraService.command.isBlank())
+            sb.append("    command: ").append(entry.extraService.command).append('\n');
+        if (!entry.volumes.isEmpty()) {
+            sb.append("    volumes:\n");
+            for (CatalogEntry.Volume volume : entry.volumes) {
+                sb.append("      - /opt/Kunlun/middleware/").append(entry.component).append('/').append(volume.dir)
+                        .append(':').append(volume.container).append(volume.flags).append('\n');
+            }
+        }
+        sb.append("    healthcheck:\n")
+                .append("      test: ").append(entry.healthcheck.test).append('\n')
+                .append("      interval: ").append(entry.healthcheck.interval).append('\n')
+                .append("      timeout: ").append(entry.healthcheck.timeout).append('\n')
+                .append("      retries: ").append(entry.healthcheck.retries).append('\n');
+        if (entry.healthcheck.startPeriod != null && !entry.healthcheck.startPeriod.isBlank())
+            sb.append("      start_period: ").append(entry.healthcheck.startPeriod).append('\n');
+        sb.append('\n');
+    }
 
-                  frontend:
-                    <<: *common
-                    image: %s-frontend:%s
-                    depends_on:
-                      backend: { condition: service_healthy }
-                    ports: [%d:80]
-                    healthcheck:
-                      test: ["CMD", "wget", "-q", "-O", "/dev/null", %s]
-                      interval: 10s
-                      timeout: 5s
-                      retries: 12
+    private void appendAppService(StringBuilder sb, ProfileService.ResolvedProfile resolved,
+                                  List<CatalogEntry> selected, String appKey, String backendVersion,
+                                  String frontendVersion, String backendHealthPath, String frontendHealthPath) {
+        sb.append("  backend:\n")
+                .append("    <<: *common\n")
+                .append("    image: ").append(appKey).append("-backend:").append(backendVersion).append('\n')
+                .append("    environment:\n");
+        for (CatalogEntry entry : selected) {
+            for (CatalogEntry.EnvEntry conn : entry.appConnections) {
+                appendAppEnv(sb, entry, conn, resolved);
+            }
+        }
+        sb.append("      JAVA_TOOL_OPTIONS: ").append(yaml(resolved.profile().javaOptions)).append('\n')
+                .append("      TZ: ").append(yaml(resolved.profile().timezone)).append('\n')
+                .append("    healthcheck:\n")
+                .append("      test: [\"CMD\", \"wget\", \"-q\", \"-O\", \"/dev/null\", ")
+                .append(yaml("http://127.0.0.1:8080" + backendHealthPath)).append("]\n")
+                .append("      interval: 10s\n")
+                .append("      timeout: 5s\n")
+                .append("      retries: 18\n")
+                .append("      start_period: 30s\n\n");
 
-                networks:
-                  kunlun-net:
-                    external: true
-                    name: kunlun-net
-                """.formatted(
-                yaml(p.mysqlUsername), yaml(resolved.mysqlPassword()), yaml(resolved.redisPassword()),
-                yaml(p.rabbitmqUsername), yaml(resolved.rabbitmqPassword()), yaml(p.minioAccessKey),
-                yaml(resolved.minioSecretKey()), appKey, backendVersion,
-                yaml("jdbc:mysql://mysql:3306/" + p.mysqlDatabase + "?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=" + p.timezone + "&allowPublicKeyRetrieval=true"),
-                p.redisDatabase, yaml(p.rabbitmqVhost), yaml(p.minioBucket), yaml(p.javaOptions), yaml(p.timezone),
-                yaml("http://127.0.0.1:8080" + backendHealthPath), appKey, frontendVersion, p.frontendPort,
-                yaml("http://127.0.0.1" + frontendHealthPath));
+        sb.append("  frontend:\n")
+                .append("    <<: *common\n")
+                .append("    image: ").append(appKey).append("-frontend:").append(frontendVersion).append('\n')
+                .append("    depends_on:\n")
+                .append("      backend: { condition: service_healthy }\n")
+                .append("    ports: [").append(resolved.profile().frontendPort).append(":80]\n")
+                .append("    healthcheck:\n")
+                .append("      test: [\"CMD\", \"wget\", \"-q\", \"-O\", \"/dev/null\", ")
+                .append(yaml("http://127.0.0.1" + frontendHealthPath)).append("]\n")
+                .append("      interval: 10s\n")
+                .append("      timeout: 5s\n")
+                .append("      retries: 12\n\n");
+    }
+
+    private void appendAppEnv(StringBuilder sb, CatalogEntry entry, CatalogEntry.EnvEntry conn,
+                              ProfileService.ResolvedProfile resolved) {
+        sb.append("      ").append(conn.env).append(": ");
+        if (conn.literal != null) {
+            sb.append(conn.literal);
+        } else if (conn.template != null) {
+            sb.append(yaml(resolveTemplate(conn.template, entry, resolved)));
+        } else if (conn.credential != null) {
+            CatalogEntry.Credential cred = entry.credential(conn.credential);
+            if (cred != null && cred.anchor) {
+                sb.append('*').append(anchor(entry.component, conn.credential));
+            } else {
+                String value = resolved.value(entry.component, conn.credential);
+                sb.append(conn.quote ? yaml(value) : value);
+            }
+        }
+        sb.append('\n');
+    }
+
+    private void appendNetworks(StringBuilder sb) {
+        sb.append("networks:\n")
+                .append("  kunlun-net:\n")
+                .append("    external: true\n")
+                .append("    name: kunlun-net\n");
+    }
+
+    private String resolveTemplate(String template, CatalogEntry entry, ProfileService.ResolvedProfile resolved) {
+        Matcher matcher = TEMPLATE.matcher(template);
+        StringBuilder sb = new StringBuilder();
+        while (matcher.find()) {
+            String key = matcher.group(1);
+            String value = "timezone".equals(key) ? resolved.profile().timezone : resolved.value(entry.component, key);
+            matcher.appendReplacement(sb, Matcher.quoteReplacement(value == null ? "" : value));
+        }
+        matcher.appendTail(sb);
+        return sb.toString();
     }
 
     private String version(Map<String, String> values, String component) {
@@ -199,6 +186,9 @@ public class ComposeRenderer {
         if (value == null || value.isBlank()) throw new IllegalArgumentException("缺少 " + component + " 制品版本");
         return value;
     }
+
+    private String anchor(String component, String key) { return "kunlun-" + component + "-" + key; }
+    private String xKey(String component, String key) { return "x-kunlun-" + component + "-" + key; }
 
     private String yaml(String value) {
         if (value == null) value = "";

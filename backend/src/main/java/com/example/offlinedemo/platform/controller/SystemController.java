@@ -19,6 +19,7 @@ public class SystemController {
     public Map<String, Object> system() {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("architecture", Models.ARCHITECTURE);
+        result.put("targets", Models.supportedTargetViews());
         result.put("host", System.getProperty("os.name") + " / " + System.getProperty("os.arch"));
         result.put("git", available(List.of("git", "--version")));
         result.put("tar", available(List.of("tar", "--version")));

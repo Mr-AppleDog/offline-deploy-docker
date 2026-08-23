@@ -57,15 +57,12 @@ case ",$UPDATE_SCOPE," in
 esac
 
 docker compose -f "$NEW_APP_COMPOSE" config --quiet
-for key in \
-  x-kunlun-mysql-user x-kunlun-mysql-password \
-  x-kunlun-redis-password x-kunlun-rabbitmq-user \
-  x-kunlun-rabbitmq-password x-kunlun-minio-user x-kunlun-minio-secret
-do
+while IFS= read -r key; do
+  [[ -n "$key" ]] || continue
   online_value="$(read_compose_anchor_value "$MIDDLEWARE_COMPOSE" "$key")"
   new_value="$(read_compose_anchor_value "$NEW_APP_COMPOSE" "$key")"
   [[ "$online_value" == "$new_value" ]] || die "更新包部署凭据与在线环境不一致：$key"
-done
+done < <(grep -o '^x-kunlun-[a-zA-Z0-9-]*:' "$MIDDLEWARE_COMPOSE" | sed 's/:$//' | sort -u)
 
 timestamp="$(date '+%Y%m%dT%H%M%S%z')"
 backup_dir="$KUNLUN_ROOT/backups/application/$timestamp"

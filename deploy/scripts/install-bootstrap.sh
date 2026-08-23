@@ -27,6 +27,7 @@ for required_file in \
   "$PACKAGE_ROOT/images.txt" \
   "$PACKAGE_ROOT/SHA256SUMS" \
   "$PACKAGE_ROOT/middleware/compose.middleware.yml" \
+  "$PACKAGE_ROOT/middleware.list" \
   "$PACKAGE_ROOT/application/compose.app.yml" \
   "$PACKAGE_ROOT/docker/install/docker-${REQUIRED_DOCKER_VERSION}.tgz" \
   "$PACKAGE_ROOT/docker/install/docker-${REQUIRED_DOCKER_VERSION}.tgz.sha256" \
@@ -37,6 +38,10 @@ for required_file in \
 do
   [[ -f "$required_file" ]] || die "离线包缺少文件：$required_file"
 done
+
+readarray -t MIDDLEWARE_COMPONENTS < "$PACKAGE_ROOT/middleware.list" || die '读取 middleware.list 失败。'
+[[ "${#MIDDLEWARE_COMPONENTS[@]}" -ge 1 ]] || die 'middleware.list 为空。'
+readonly EXPECTED_IMAGE_COUNT=$(( ${#MIDDLEWARE_COMPONENTS[@]} + 2 ))
 
 grep -qx 'PACKAGE_TYPE=bootstrap' "$PACKAGE_ROOT/manifest.env" || die '离线包类型不是 bootstrap。'
 grep -qx "APP_VERSION=$APP_VERSION" "$PACKAGE_ROOT/manifest.env" || die "离线包版本不是 $APP_VERSION。"
@@ -61,12 +66,8 @@ ensure_lock_dir
 exec 9>"$LOCK_DIR/install-bootstrap.lock"
 flock -n 9 || die '另一个 bootstrap 安装任务正在执行。'
 
-for data_dir in \
-  "$KUNLUN_ROOT/middleware/mysql/data" \
-  "$KUNLUN_ROOT/middleware/redis/data" \
-  "$KUNLUN_ROOT/middleware/rabbitmq/data" \
-  "$KUNLUN_ROOT/middleware/minio/data"
-do
+for component in "${MIDDLEWARE_COMPONENTS[@]}"; do
+  data_dir="$KUNLUN_ROOT/middleware/$component/data"
   if find "$data_dir" -mindepth 1 -print -quit | grep -q .; then
     die "初始安装禁止覆盖已有数据：$data_dir"
   fi
@@ -83,16 +84,18 @@ install -m 0750 "$PACKAGE_ROOT"/scripts/*.sh "$KUNLUN_ROOT/scripts/"
 install -d -m 0700 "$KUNLUN_ROOT/application/images/$APP_VERSION"
 install -d -m 0700 "$KUNLUN_ROOT/database/migrations/$APP_VERSION"
 
-cp -a "$PACKAGE_ROOT/middleware/mysql/image/." "$KUNLUN_ROOT/middleware/mysql/image/"
-cp -a "$PACKAGE_ROOT/middleware/redis/image/." "$KUNLUN_ROOT/middleware/redis/image/"
-cp -a "$PACKAGE_ROOT/middleware/rabbitmq/image/." "$KUNLUN_ROOT/middleware/rabbitmq/image/"
-cp -a "$PACKAGE_ROOT/middleware/minio/image/." "$KUNLUN_ROOT/middleware/minio/image/"
+for component in "${MIDDLEWARE_COMPONENTS[@]}"; do
+  cp -a "$PACKAGE_ROOT/middleware/$component/image/." "$KUNLUN_ROOT/middleware/$component/image/"
+done
 cp -a "$PACKAGE_ROOT/application/images/$APP_VERSION/." "$KUNLUN_ROOT/application/images/$APP_VERSION/"
 cp -a "$PACKAGE_ROOT/database/init/." "$KUNLUN_ROOT/database/init/"
 cp -a "$PACKAGE_ROOT/database/migrations/$APP_VERSION/." "$KUNLUN_ROOT/database/migrations/$APP_VERSION/"
 
 install -m 0600 "$PACKAGE_ROOT/manifest.env" "$KUNLUN_ROOT/application/images/$APP_VERSION/manifest.env"
 install -m 0600 "$PACKAGE_ROOT/images.txt" "$KUNLUN_ROOT/application/images/$APP_VERSION/images.txt"
+install -m 0600 "$PACKAGE_ROOT/images.txt" "$KUNLUN_ROOT/images.txt"
+install -m 0644 "$PACKAGE_ROOT/middleware.list" "$KUNLUN_ROOT/middleware.list"
+install -m 0644 "$PACKAGE_ROOT/middleware.spec.json" "$KUNLUN_ROOT/middleware.spec.json"
 chmod -R go-rwx "$KUNLUN_ROOT"/middleware/*/image "$KUNLUN_ROOT/application/images"
 
 install -m 0600 \
@@ -182,7 +185,7 @@ validate_runtime_files
 compose_middleware config --quiet
 compose_app config --quiet
 
-log '校验并导入六个镜像。'
+log '校验并导入镜像。'
 record_count=0
 while IFS='|' read -r image expected_id expected_platform tar_relative expected_tar_hash; do
   [[ -n "$image" && -n "$expected_id" && -n "$expected_platform" && -n "$tar_relative" && -n "$expected_tar_hash" ]] || \
@@ -207,7 +210,7 @@ while IFS='|' read -r image expected_id expected_platform tar_relative expected_
   fi
   record_count=$((record_count + 1))
 done <"$PACKAGE_ROOT/images.txt"
-[[ "$record_count" -eq 6 ]] || die "images.txt 镜像数量不是 6：$record_count"
+[[ "$record_count" -eq "$EXPECTED_IMAGE_COUNT" ]] || die "images.txt 镜像数量不是 $EXPECTED_IMAGE_COUNT：$record_count"
 
 if find "$KUNLUN_ROOT/database/init" -maxdepth 1 -type f -name '*.sql' -print -quit | grep -q .; then
   cp -a "$KUNLUN_ROOT/database/init/." "$KUNLUN_ROOT/middleware/mysql/init/"

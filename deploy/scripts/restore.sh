@@ -14,7 +14,10 @@ require_command tar
 timestamp="$2"
 [[ "$timestamp" =~ ^[0-9]{8}T[0-9]{6}[+-][0-9]{4}$ ]] || die '备份时间戳格式错误。'
 
-for component in mysql redis rabbitmq minio application; do
+readarray -t MIDDLEWARE_COMPONENTS < "$KUNLUN_ROOT/middleware.list" || die '读取 middleware.list 失败。'
+[[ "${#MIDDLEWARE_COMPONENTS[@]}" -ge 1 ]] || die 'middleware.list 为空。'
+
+for component in "${MIDDLEWARE_COMPONENTS[@]}" application; do
   source_dir="$KUNLUN_ROOT/backups/$component/$timestamp"
   [[ -d "$source_dir" ]] || die "缺少备份目录：$source_dir"
   [[ -f "$source_dir/SHA256SUMS" ]] || die "缺少校验文件：$source_dir/SHA256SUMS"
@@ -25,32 +28,37 @@ for component in mysql redis rabbitmq minio application; do
 done
 
 test_root="$(mktemp -d "$KUNLUN_ROOT/tmp/restore-test.${timestamp}.XXXXXX")"
-install -d -m 0700 \
-  "$test_root/mysql" \
-  "$test_root/redis" \
-  "$test_root/rabbitmq" \
-  "$test_root/minio" \
-  "$test_root/application"
+install -d -m 0700 "$test_root/application"
+for component in "${MIDDLEWARE_COMPONENTS[@]}"; do
+  install -d -m 0700 "$test_root/$component"
+done
 
-tar -xzf "$KUNLUN_ROOT/backups/mysql/$timestamp/cold-data.tar.gz" -C "$test_root/mysql"
-tar -xzf "$KUNLUN_ROOT/backups/redis/$timestamp/cold-data.tar.gz" -C "$test_root/redis"
-tar -xzf "$KUNLUN_ROOT/backups/rabbitmq/$timestamp/cold-data.tar.gz" -C "$test_root/rabbitmq"
-tar -xzf "$KUNLUN_ROOT/backups/minio/$timestamp/cold-data.tar.gz" -C "$test_root/minio"
+for component in "${MIDDLEWARE_COMPONENTS[@]}"; do
+  tar -xzf "$KUNLUN_ROOT/backups/$component/$timestamp/cold-data.tar.gz" -C "$test_root/$component"
+done
 
-install -m 0600 \
-  "$KUNLUN_ROOT/backups/mysql/$timestamp/all-databases.sql" \
-  "$test_root/mysql/all-databases.sql"
-install -m 0600 \
-  "$KUNLUN_ROOT/backups/rabbitmq/$timestamp/definitions.json" \
-  "$test_root/rabbitmq/definitions.json"
+if component_configured mysql; then
+  install -m 0600 \
+    "$KUNLUN_ROOT/backups/mysql/$timestamp/all-databases.sql" \
+    "$test_root/mysql/all-databases.sql"
+fi
+if component_configured rabbitmq; then
+  install -m 0600 \
+    "$KUNLUN_ROOT/backups/rabbitmq/$timestamp/definitions.json" \
+    "$test_root/rabbitmq/definitions.json"
+fi
 cp -a "$KUNLUN_ROOT/backups/application/$timestamp/." "$test_root/application/"
 chmod -R go-rwx "$test_root"
 
-for component in mysql redis rabbitmq minio; do
+for component in "${MIDDLEWARE_COMPONENTS[@]}"; do
   [[ -d "$test_root/$component/data" ]] || die "恢复演练缺少 data：$component"
 done
-[[ -s "$test_root/mysql/all-databases.sql" ]] || die 'MySQL 逻辑备份为空。'
-[[ -s "$test_root/rabbitmq/definitions.json" ]] || die 'RabbitMQ definitions 为空。'
+if component_configured mysql; then
+  [[ -s "$test_root/mysql/all-databases.sql" ]] || die 'MySQL 逻辑备份为空。'
+fi
+if component_configured rabbitmq; then
+  [[ -s "$test_root/rabbitmq/definitions.json" ]] || die 'RabbitMQ definitions 为空。'
+fi
 
 log '恢复演练完成；未修改在线数据。'
 printf '%s\n' "$test_root"

@@ -49,6 +49,16 @@ kunlun:
     admin-token: ${KUNLUN_ADMIN_TOKEN:}
     max-analysis-files: ${KUNLUN_MAX_ANALYSIS_FILES:6000}
     command-timeout-minutes: ${KUNLUN_COMMAND_TIMEOUT_MINUTES:60}
+    metadata:
+      jdbc-url: ${KUNLUN_METADB_URL:}
+      username: ${KUNLUN_METADB_USER:}
+      password: ${KUNLUN_METADB_PASSWORD:}
+    storage:
+      type: ${KUNLUN_STORAGE_TYPE:local}
+      minio-endpoint: ${KUNLUN_MINIO_ENDPOINT:}
+      minio-access-key: ${KUNLUN_MINIO_ACCESS_KEY:}
+      minio-secret-key: ${KUNLUN_MINIO_SECRET_KEY:}
+      minio-bucket: ${KUNLUN_MINIO_BUCKET:kunlun-platform}
   legacy-health:
     enabled: false
 

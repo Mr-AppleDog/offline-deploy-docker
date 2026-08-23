@@ -1,63 +1,72 @@
 package com.example.offlinedemo.platform.service;
 
+import com.example.offlinedemo.platform.catalog.MiddlewareCatalog;
 import com.example.offlinedemo.platform.config.PlatformProperties;
 import com.example.offlinedemo.platform.domain.Models;
+import com.example.offlinedemo.platform.store.BlobStore;
 import com.example.offlinedemo.platform.store.PlatformStore;
 import com.example.offlinedemo.platform.util.FileSupport;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import java.util.UUID;
 
 @Service
 public class ArtifactService {
-    public static final Set<String> COMPONENTS = Set.of(
-            "docker-engine", "docker-compose", "mysql", "redis", "rabbitmq", "minio",
-            "postgresql", "kafka", "elasticsearch");
+    public static final List<String> INFRA_COMPONENTS = List.of("docker-engine", "docker-compose");
     private final PlatformStore store;
+    private final MiddlewareCatalog catalog;
+    private final BlobStore blobStore;
     private final Path projectRoot;
 
-    public ArtifactService(PlatformStore store, PlatformProperties properties) {
+    public ArtifactService(PlatformStore store, MiddlewareCatalog catalog, BlobStore blobStore,
+                           PlatformProperties properties) {
         this.store = store;
+        this.catalog = catalog;
+        this.blobStore = blobStore;
         this.projectRoot = properties.projectRootPath().toAbsolutePath().normalize();
     }
 
-    public Models.Artifact importFile(String component, String version, String sourcePath) throws Exception {
+    public Models.Artifact importFile(String component, String version, String sourcePath, String arch) throws Exception {
         String normalizedComponent = component == null ? "" : component.toLowerCase(Locale.ROOT);
-        if (!COMPONENTS.contains(normalizedComponent)) throw new IllegalArgumentException("不支持的制品组件：" + component);
+        if (!INFRA_COMPONENTS.contains(normalizedComponent) && !catalog.exists(normalizedComponent))
+            throw new IllegalArgumentException("不支持的制品组件：" + component);
         if (version == null || !version.matches("^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$"))
             throw new IllegalArgumentException("制品版本格式不正确");
         if (sourcePath == null || sourcePath.isBlank()) throw new IllegalArgumentException("源文件路径不能为空");
+        Models.BuildTarget target = Models.BuildTarget.of(null, arch).normalized();
         Path source = Path.of(sourcePath);
         if (!source.isAbsolute()) source = projectRoot.resolve(source).normalize();
         if (!Files.isRegularFile(source)) throw new IllegalArgumentException("源文件不存在：" + source);
         String lowerName = source.getFileName().toString().toLowerCase(Locale.ROOT);
         if ("docker-engine".equals(normalizedComponent) && !lowerName.endsWith(".tgz"))
             throw new IllegalArgumentException("Docker Engine 制品必须是 .tgz");
-        if (!List.of("docker-engine", "docker-compose").contains(normalizedComponent) && !lowerName.endsWith(".tar"))
+        if (!INFRA_COMPONENTS.contains(normalizedComponent) && !lowerName.endsWith(".tar"))
             throw new IllegalArgumentException("中间件镜像制品必须是 docker save 生成的 .tar");
 
         Models.Artifact artifact = new Models.Artifact();
         artifact.id = UUID.randomUUID().toString();
         artifact.component = normalizedComponent;
         artifact.version = version;
-        artifact.architecture = Models.ARCHITECTURE;
+        artifact.architecture = target.ociPlatform();
         String safeName = source.getFileName().toString().replaceAll("[^A-Za-z0-9._+-]", "-");
         artifact.fileName = safeName;
-        Path directory = store.artifactsRoot().resolve(normalizedComponent).resolve(version).normalize();
-        if (!directory.startsWith(store.artifactsRoot())) throw new IllegalArgumentException("制品目录越界");
-        Files.createDirectories(directory);
-        Path destination = directory.resolve(artifact.id.substring(0, 8) + "-" + safeName);
-        Files.copy(source, destination);
-        artifact.storagePath = destination.toString();
-        artifact.size = Files.size(destination);
-        artifact.sha256 = FileSupport.sha256(destination);
+        artifact.size = Files.size(source);
+        artifact.sha256 = FileSupport.sha256(source);
+
+        String prefix = artifact.id.substring(0, 8) + "-" + safeName;
+        String destination = blobStore.remote()
+                ? "artifacts/" + normalizedComponent + "/" + version + "/" + prefix
+                : store.artifactsRoot().resolve(normalizedComponent).resolve(version).resolve(prefix).toString();
+        BlobStore.BlobRef ref = blobStore.put(source, destination);
+        artifact.storeType = ref.storeType();
+        if ("minio".equals(ref.storeType())) artifact.objectKey = ref.ref();
+        else artifact.storagePath = ref.ref();
+
         artifact.createdAt = Instant.now();
         store.putArtifact(artifact);
         return artifact;

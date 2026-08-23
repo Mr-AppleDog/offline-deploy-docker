@@ -30,7 +30,7 @@ class AnalyzerServiceTest {
 
         assertThat(result.commits).containsEntry("BACKEND", "abc123");
         assertThat(result.findings).extracting(finding -> finding.component)
-                .contains("SPRING_BOOT", "MYSQL", "REDIS", "RABBITMQ", "MINIO", "DOCKERFILE");
+                .contains("SPRING_BOOT", "mysql", "redis", "rabbitmq", "minio", "DOCKERFILE");
         assertThat(result.findings).allMatch(finding -> !finding.evidence.isEmpty() && finding.confirmed);
     }
 }

@@ -1,5 +1,7 @@
 package com.example.offlinedemo.platform.controller;
 
+import com.example.offlinedemo.platform.catalog.CatalogEntry;
+import com.example.offlinedemo.platform.catalog.MiddlewareCatalog;
 import com.example.offlinedemo.platform.domain.Models;
 import com.example.offlinedemo.platform.service.ArtifactService;
 import com.example.offlinedemo.platform.service.ProfileService;
@@ -27,13 +29,15 @@ public class PlatformController {
     private final ProjectService projects;
     private final ProfileService profiles;
     private final ArtifactService artifacts;
+    private final MiddlewareCatalog catalog;
 
     public PlatformController(PlatformStore store, ProjectService projects, ProfileService profiles,
-                              ArtifactService artifacts) {
+                              ArtifactService artifacts, MiddlewareCatalog catalog) {
         this.store = store;
         this.projects = projects;
         this.profiles = profiles;
         this.artifacts = artifacts;
+        this.catalog = catalog;
     }
 
     @GetMapping("/dashboard")
@@ -44,7 +48,8 @@ public class PlatformController {
                 "artifacts", store.artifacts().size(),
                 "builds", store.builds().size(),
                 "runningBuilds", store.countBuildsByStatus("RUNNING") + store.countBuildsByStatus("QUEUED"),
-                "architecture", Models.ARCHITECTURE);
+                "architecture", Models.ARCHITECTURE,
+                "targets", Models.supportedTargetViews());
     }
 
     @GetMapping("/projects")
@@ -115,18 +120,24 @@ public class PlatformController {
     @PostMapping("/profiles/generate-password")
     public Map<String, String> generatePassword() { return Map.of("password", profiles.generatePassword()); }
 
+    @GetMapping("/middleware/catalog")
+    public List<Map<String, Object>> middlewareCatalog() { return catalog.all().stream().map(this::catalogView).toList(); }
+
     @GetMapping("/artifacts")
     public List<Models.Artifact> artifacts() { return store.artifacts(); }
 
     @GetMapping("/artifacts/components")
     public Map<String, Object> artifactComponents() {
-        return Map.of("architecture", Models.ARCHITECTURE, "components", ArtifactService.COMPONENTS.stream().sorted().toList());
+        List<String> components = new java.util.ArrayList<>(ArtifactService.INFRA_COMPONENTS);
+        catalog.all().forEach(entry -> components.add(entry.component));
+        return Map.of("architecture", Models.ARCHITECTURE, "targets", Models.supportedTargetViews(),
+                "components", components);
     }
 
     @PostMapping("/artifacts/import")
     @ResponseStatus(HttpStatus.CREATED)
     public Models.Artifact importArtifact(@RequestBody ArtifactInput input) throws Exception {
-        return artifacts.importFile(input.component, input.version, input.sourcePath);
+        return artifacts.importFile(input.component, input.version, input.sourcePath, input.arch);
     }
 
     private Map<String, Object> projectView(Models.Project project) {
@@ -167,22 +178,49 @@ public class PlatformController {
         view.put("name", profile.name);
         view.put("environment", profile.environment);
         view.put("revision", profile.revision);
-        view.put("mysqlDatabase", profile.mysqlDatabase);
-        view.put("mysqlRootUsername", profile.mysqlRootUsername);
-        view.put("mysqlUsername", profile.mysqlUsername);
-        view.put("redisDatabase", profile.redisDatabase);
-        view.put("rabbitmqUsername", profile.rabbitmqUsername);
-        view.put("rabbitmqVhost", profile.rabbitmqVhost);
-        view.put("minioAccessKey", profile.minioAccessKey);
-        view.put("minioBucket", profile.minioBucket);
+        view.put("targetOs", profile.targetOs);
+        view.put("targetArch", profile.targetArch);
         view.put("frontendPort", profile.frontendPort);
         view.put("timezone", profile.timezone);
         view.put("javaOptions", profile.javaOptions);
-        view.put("secretsConfigured", Map.of("mysqlRoot", profile.mysqlRootPasswordCipher != null,
-                "mysql", profile.mysqlPasswordCipher != null, "redis", profile.redisPasswordCipher != null,
-                "rabbitmq", profile.rabbitmqPasswordCipher != null, "minio", profile.minioSecretKeyCipher != null));
+        view.put("middleware", profile.middleware.stream().map(this::credentialView).toList());
         view.put("createdAt", profile.createdAt);
         view.put("updatedAt", profile.updatedAt);
+        return view;
+    }
+
+    private Map<String, Object> credentialView(Models.MiddlewareCredential mc) {
+        CatalogEntry entry = catalog.entry(mc.component);
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("component", mc.component);
+        Map<String, Object> values = new LinkedHashMap<>();
+        Map<String, Boolean> configured = new LinkedHashMap<>();
+        for (CatalogEntry.Credential cred : entry.credentials) {
+            String stored = mc.values.getOrDefault(cred.key, "");
+            if (cred.secret) {
+                configured.put(cred.key, stored != null && !stored.isBlank());
+                values.put(cred.key, "");
+            } else {
+                values.put(cred.key, stored == null ? "" : stored);
+            }
+        }
+        view.put("values", values);
+        view.put("configured", configured);
+        return view;
+    }
+
+    private Map<String, Object> catalogView(CatalogEntry entry) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("component", entry.component);
+        view.put("displayName", entry.displayName);
+        view.put("category", entry.category);
+        view.put("imageRepo", entry.imageRepo);
+        view.put("architectures", entry.architectures);
+        view.put("notes", entry.notes);
+        view.put("credentials", entry.credentials.stream().map(cred -> Map.of(
+                "key", cred.key, "label", cred.label, "secret", cred.secret, "required", cred.required,
+                "envVar", cred.envVar == null ? "" : cred.envVar,
+                "defaultValue", cred.defaultValue == null ? "" : cred.defaultValue)).toList());
         return view;
     }
 
@@ -195,5 +233,5 @@ public class PlatformController {
         public String dockerfile; public String authType; public String username; public String secret;
     }
     public static final class AnalysisConfirmation { public Map<String, Boolean> decisions; }
-    public static final class ArtifactInput { public String component; public String version; public String sourcePath; }
+    public static final class ArtifactInput { public String component; public String version; public String sourcePath; public String arch; }
 }

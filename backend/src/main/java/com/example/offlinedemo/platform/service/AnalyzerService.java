@@ -68,19 +68,31 @@ public class AnalyzerService {
         if (content.contains("\"react\"") || content.contains("react-dom"))
             add(values, "REACT", "FRAMEWORK", "React", .98, evidence);
         if (content.contains("mysql-connector") || content.contains("jdbc:mysql") || content.contains("image: mysql"))
-            add(values, "MYSQL", "MIDDLEWARE", "MySQL", .99, evidence);
+            add(values, "mysql", "MIDDLEWARE", "MySQL", .99, evidence);
         if (content.contains("data-redis") || content.contains("redis://") || content.contains("image: redis"))
-            add(values, "REDIS", "MIDDLEWARE", "Redis", .98, evidence);
+            add(values, "redis", "MIDDLEWARE", "Redis", .98, evidence);
         if (content.contains("spring-boot-starter-amqp") || content.contains("rabbitmq") || content.contains("amqp://"))
-            add(values, "RABBITMQ", "MIDDLEWARE", "RabbitMQ", .98, evidence);
+            add(values, "rabbitmq", "MIDDLEWARE", "RabbitMQ", .98, evidence);
         if (content.contains("io.minio") || content.contains("minio/minio") || content.contains("minio_endpoint"))
-            add(values, "MINIO", "MIDDLEWARE", "MinIO", .98, evidence);
+            add(values, "minio", "MIDDLEWARE", "MinIO", .98, evidence);
         if (content.contains("spring-kafka") || content.contains("kafka-clients") || content.contains("image: kafka"))
-            add(values, "KAFKA", "MIDDLEWARE", "Kafka", .97, evidence);
+            add(values, "kafka", "MIDDLEWARE", "Kafka", .97, evidence);
         if (content.contains("elasticsearch") || content.contains("spring-data-elasticsearch"))
-            add(values, "ELASTICSEARCH", "MIDDLEWARE", "Elasticsearch", .94, evidence);
-        if (content.contains("jdbc:postgresql") || content.contains("postgresql") || content.contains("image: postgres"))
-            add(values, "POSTGRESQL", "MIDDLEWARE", "PostgreSQL", .96, evidence);
+            add(values, "elasticsearch", "MIDDLEWARE", "Elasticsearch", .94, evidence);
+        if (content.contains("jdbc:postgresql") || content.contains("postgresql"))
+            add(values, "postgresql", "MIDDLEWARE", "PostgreSQL", .96, evidence);
+        if (content.contains("mongodb") || content.contains("spring-data-mongodb") || content.contains("image: mongo"))
+            add(values, "mongodb", "MIDDLEWARE", "MongoDB", .95, evidence);
+        if (content.contains("kingbase") || content.contains("kingbasees") || content.contains("人大金仓"))
+            add(values, "kingbase", "MIDDLEWARE", "人大金仓 KingbaseES", .92, evidence);
+        if (content.contains("dameng") || content.contains("jdbc:dm") || content.contains("达梦"))
+            add(values, "dameng", "MIDDLEWARE", "达梦 DM8", .92, evidence);
+        if (content.contains("highgo") || content.contains("瀚高"))
+            add(values, "highgo", "MIDDLEWARE", "瀚高 HighGo", .90, evidence);
+        if (content.contains("tongweb") || content.contains("tonglinkq") || content.contains("东方通"))
+            add(values, "tongweb", "MIDDLEWARE", "东方通 TongWeb", .90, evidence);
+        if (content.contains("image: nginx") || content.contains("nginx/"))
+            add(values, "nginx", "MIDDLEWARE", "Nginx", .90, evidence);
         if (name.endsWith(".sql")) add(values, "DATABASE_SCRIPTS", "DATABASE", "数据库脚本", .90, evidence);
         if ("dockerfile".equals(name)) add(values, "DOCKERFILE", "BUILD", "Dockerfile", 1, evidence);
     }

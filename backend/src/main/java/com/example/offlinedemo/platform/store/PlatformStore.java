@@ -2,43 +2,39 @@ package com.example.offlinedemo.platform.store;
 
 import com.example.offlinedemo.platform.config.PlatformProperties;
 import com.example.offlinedemo.platform.domain.Models;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.function.Consumer;
 
+/**
+ * 平台聚合根仓库。内存中维护状态，持久化下沉到 {@link MetadataStore}
+ * （MySQL 或本地 JSON，由 PersistenceConfig 决定）。
+ */
 @Component
 public class PlatformStore {
-    private final ObjectMapper objectMapper;
+    private final MetadataStore metadataStore;
     private final Path root;
-    private final Path stateFile;
     private Models.PlatformState state = new Models.PlatformState();
 
-    public PlatformStore(ObjectMapper objectMapper, PlatformProperties properties) {
-        this.objectMapper = objectMapper.copy().findAndRegisterModules();
+    public PlatformStore(MetadataStore metadataStore, PlatformProperties properties) {
+        this.metadataStore = metadataStore;
         this.root = properties.dataDirPath().toAbsolutePath().normalize();
-        this.stateFile = root.resolve("platform-state.json");
     }
 
     @PostConstruct
-    public synchronized void initialize() throws IOException {
+    public synchronized void initialize() throws Exception {
         Files.createDirectories(root);
         Files.createDirectories(artifactsRoot());
         Files.createDirectories(workspacesRoot());
         Files.createDirectories(deliveriesRoot());
         Files.createDirectories(logsRoot());
-        if (Files.isRegularFile(stateFile)) {
-            state = objectMapper.readValue(stateFile.toFile(), Models.PlatformState.class);
-        }
+        state = metadataStore.load();
         if (state.projects == null) state.projects = new java.util.LinkedHashMap<>();
         if (state.profiles == null) state.profiles = new java.util.LinkedHashMap<>();
         if (state.artifacts == null) state.artifacts = new java.util.LinkedHashMap<>();
@@ -61,6 +57,8 @@ public class PlatformStore {
     public Path workspacesRoot() { return root.resolve("workspaces"); }
     public Path deliveriesRoot() { return root.resolve("deliveries"); }
     public Path logsRoot() { return root.resolve("logs"); }
+
+    public boolean remote() { return metadataStore.remote(); }
 
     public synchronized List<Models.Project> projects() {
         return state.projects.values().stream()
@@ -146,15 +144,9 @@ public class PlatformStore {
     }
 
     private void save() {
-        Path temporary = stateFile.resolveSibling(stateFile.getFileName() + ".tmp");
         try {
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), state);
-            try {
-                Files.move(temporary, stateFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
-                Files.move(temporary, stateFile, StandardCopyOption.REPLACE_EXISTING);
-            }
-        } catch (IOException e) {
+            metadataStore.save(state);
+        } catch (Exception e) {
             throw new IllegalStateException("保存平台状态失败", e);
         }
     }

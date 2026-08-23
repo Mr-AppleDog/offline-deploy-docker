@@ -1,21 +1,29 @@
 package com.example.offlinedemo.platform.service;
 
+import com.example.offlinedemo.platform.catalog.CatalogEntry;
+import com.example.offlinedemo.platform.catalog.MiddlewareCatalog;
 import com.example.offlinedemo.platform.domain.Models;
 import com.example.offlinedemo.platform.security.CryptoService;
 import com.example.offlinedemo.platform.store.PlatformStore;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
 public class ProfileService {
     private final PlatformStore store;
     private final CryptoService crypto;
+    private final MiddlewareCatalog catalog;
 
-    public ProfileService(PlatformStore store, CryptoService crypto) {
+    public ProfileService(PlatformStore store, CryptoService crypto, MiddlewareCatalog catalog) {
         this.store = store;
         this.crypto = crypto;
+        this.catalog = catalog;
     }
 
     public Models.DeploymentProfile save(String id, ProfileInput input) {
@@ -28,29 +36,47 @@ public class ProfileService {
             profile.id = UUID.randomUUID().toString();
             profile.createdAt = now;
             profile.revision = 0;
-        } else profile = store.profile(id);
+        } else {
+            profile = store.profile(id);
+        }
 
         profile.name = input.name.trim();
         profile.environment = defaultValue(input.environment, "生产环境");
-        profile.mysqlDatabase = identifier(defaultValue(input.mysqlDatabase, "kunlun_app"), "MySQL 数据库名");
-        profile.mysqlRootUsername = identifier(defaultValue(input.mysqlRootUsername, "root"), "MySQL root 账号");
-        profile.mysqlUsername = identifier(defaultValue(input.mysqlUsername, "kunlun_app"), "MySQL 业务账号");
-        profile.redisDatabase = input.redisDatabase == null ? 0 : input.redisDatabase;
-        if (profile.redisDatabase < 0 || profile.redisDatabase > 15) throw new IllegalArgumentException("Redis DB 必须在 0-15 之间");
-        profile.rabbitmqUsername = identifier(defaultValue(input.rabbitmqUsername, "kunlun_app"), "RabbitMQ 账号");
-        profile.rabbitmqVhost = defaultValue(input.rabbitmqVhost, "/");
-        profile.minioAccessKey = identifier(defaultValue(input.minioAccessKey, "kunlunadmin"), "MinIO Access Key");
-        profile.minioBucket = bucket(defaultValue(input.minioBucket, "kunlun-app"));
+        Models.BuildTarget target = Models.BuildTarget.of(input.targetOs, input.targetArch).normalized();
+        profile.targetOs = target.os;
+        profile.targetArch = target.arch;
         profile.frontendPort = input.frontendPort == null ? 80 : input.frontendPort;
         if (profile.frontendPort < 1 || profile.frontendPort > 65535) throw new IllegalArgumentException("前端端口无效");
         profile.timezone = defaultValue(input.timezone, "Asia/Shanghai");
         profile.javaOptions = defaultValue(input.javaOptions, "-Xms256m -Xmx1024m");
 
-        profile.mysqlRootPasswordCipher = secret(input.mysqlRootPassword, profile.mysqlRootPasswordCipher, creating, "MySQL root 密码");
-        profile.mysqlPasswordCipher = secret(input.mysqlPassword, profile.mysqlPasswordCipher, creating, "MySQL 业务密码");
-        profile.redisPasswordCipher = secret(input.redisPassword, profile.redisPasswordCipher, creating, "Redis 密码");
-        profile.rabbitmqPasswordCipher = secret(input.rabbitmqPassword, profile.rabbitmqPasswordCipher, creating, "RabbitMQ 密码");
-        profile.minioSecretKeyCipher = secret(input.minioSecretKey, profile.minioSecretKeyCipher, creating, "MinIO Secret Key");
+        Map<String, Map<String, String>> existing = new LinkedHashMap<>();
+        for (Models.MiddlewareCredential mc : profile.middleware) existing.put(mc.component, mc.values);
+
+        List<Models.MiddlewareCredential> next = new ArrayList<>();
+        if (input.middleware != null) {
+            for (ProfileInput.MiddlewareInput mi : input.middleware) {
+                CatalogEntry entry = catalog.entry(mi.component);
+                Models.MiddlewareCredential mc = new Models.MiddlewareCredential();
+                mc.component = mi.component;
+                Map<String, String> old = existing.getOrDefault(mi.component, Map.of());
+                Map<String, String> incoming = mi.credentials == null ? Map.of() : mi.credentials;
+                for (CatalogEntry.Credential cred : entry.credentials) {
+                    String provided = incoming.get(cred.key);
+                    String current = old.get(cred.key);
+                    if (cred.secret) {
+                        mc.values.put(cred.key, secret(provided, current, creating && cred.required, cred.label));
+                    } else {
+                        String value = defaultValue(provided, cred.defaultValue);
+                        if (cred.required && creating && (value == null || value.isBlank()))
+                            throw new IllegalArgumentException(cred.label + "不能为空");
+                        mc.values.put(cred.key, value == null ? "" : value);
+                    }
+                }
+                next.add(mc);
+            }
+        }
+        profile.middleware = next;
         profile.revision++;
         profile.updatedAt = now;
         store.putProfile(profile);
@@ -59,9 +85,17 @@ public class ProfileService {
 
     public ResolvedProfile resolve(String id) {
         Models.DeploymentProfile p = store.profile(id);
-        return new ResolvedProfile(p, crypto.decrypt(p.mysqlRootPasswordCipher), crypto.decrypt(p.mysqlPasswordCipher),
-                crypto.decrypt(p.redisPasswordCipher), crypto.decrypt(p.rabbitmqPasswordCipher),
-                crypto.decrypt(p.minioSecretKeyCipher));
+        Map<String, Map<String, String>> resolved = new LinkedHashMap<>();
+        for (Models.MiddlewareCredential mc : p.middleware) {
+            CatalogEntry entry = catalog.entry(mc.component);
+            Map<String, String> values = new LinkedHashMap<>();
+            for (CatalogEntry.Credential cred : entry.credentials) {
+                String stored = mc.values.getOrDefault(cred.key, "");
+                values.put(cred.key, cred.secret ? crypto.decrypt(stored) : stored);
+            }
+            resolved.put(mc.component, values);
+        }
+        return new ResolvedProfile(p, resolved);
     }
 
     public String generatePassword() { return crypto.generatePassword(); }
@@ -78,40 +112,33 @@ public class ProfileService {
         return crypto.encrypt(candidate);
     }
 
-    private String identifier(String value, String label) {
-        if (!value.matches("^[A-Za-z][A-Za-z0-9_.-]{1,62}$")) throw new IllegalArgumentException(label + "格式不正确");
-        return value;
-    }
-
-    private String bucket(String value) {
-        if (!value.matches("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")) throw new IllegalArgumentException("MinIO Bucket 格式不正确");
-        return value;
-    }
-
     private String defaultValue(String value, String fallback) { return value == null || value.isBlank() ? fallback : value.trim(); }
 
     public static final class ProfileInput {
         public String name;
         public String environment;
-        public String mysqlDatabase;
-        public String mysqlRootUsername;
-        public String mysqlRootPassword;
-        public String mysqlUsername;
-        public String mysqlPassword;
-        public Integer redisDatabase;
-        public String redisPassword;
-        public String rabbitmqUsername;
-        public String rabbitmqPassword;
-        public String rabbitmqVhost;
-        public String minioAccessKey;
-        public String minioSecretKey;
-        public String minioBucket;
+        public String targetOs;
+        public String targetArch;
         public Integer frontendPort;
         public String timezone;
         public String javaOptions;
+        public List<MiddlewareInput> middleware;
+
+        public static final class MiddlewareInput {
+            public String component;
+            public Map<String, String> credentials = new LinkedHashMap<>();
+        }
     }
 
-    public record ResolvedProfile(Models.DeploymentProfile profile, String mysqlRootPassword,
-                                  String mysqlPassword, String redisPassword,
-                                  String rabbitmqPassword, String minioSecretKey) {}
+    /** 已解密（secret 字段）的部署配置快照。credentials 键为 component -> credentialKey -> 明文。 */
+    public record ResolvedProfile(Models.DeploymentProfile profile, Map<String, Map<String, String>> credentials) {
+        public List<CatalogEntry> selectedEntries(MiddlewareCatalog catalog) {
+            return profile.middleware.stream().map(mc -> catalog.entry(mc.component)).toList();
+        }
+
+        public String value(String component, String key) {
+            Map<String, String> map = credentials.get(component);
+            return map == null ? "" : map.getOrDefault(key, "");
+        }
+    }
 }

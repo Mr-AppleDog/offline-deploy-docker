@@ -9,6 +9,9 @@ source "$SCRIPT_DIR/common.sh"
 require_root
 require_docker
 
+readarray -t MIDDLEWARE_COMPONENTS < "$KUNLUN_ROOT/middleware.list" || die '读取 middleware.list 失败。'
+[[ "${#MIDDLEWARE_COMPONENTS[@]}" -ge 1 ]] || die 'middleware.list 为空。'
+
 prepare_data_dir() {
   local image="$1" path="$2" user_spec uid gid identity
 
@@ -38,21 +41,22 @@ prepare_data_dir() {
   chown "$uid:$gid" "$path"
 }
 
-for image in \
-  mysql:8.4.11 \
-  redis:8.2.8 \
-  rabbitmq:4.3.4-management \
-  minio/minio:RELEASE.2025-07-18T21-56-31Z
-do
+image_of() {
+  local component="$1"
+  awk -F'|' -v prefix="middleware/$component/image/" 'index($4, prefix) == 1 { print $1; exit }' "$KUNLUN_ROOT/images.txt"
+}
+
+for component in "${MIDDLEWARE_COMPONENTS[@]}"; do
+  image="$(image_of "$component")"
+  [[ -n "$image" ]] || die "images.txt 中缺少中间件镜像条目：$component"
   docker image inspect "$image" >/dev/null 2>&1 || die "镜像尚未导入：$image"
+  prepare_data_dir "$image" "$KUNLUN_ROOT/middleware/$component/data"
 done
 
-install -d -m 0755 "$KUNLUN_ROOT/middleware/mysql/conf.d"
-install -d -m 0755 "$KUNLUN_ROOT/middleware/mysql/init"
-prepare_data_dir mysql:8.4.11 "$KUNLUN_ROOT/middleware/mysql/data"
-prepare_data_dir redis:8.2.8 "$KUNLUN_ROOT/middleware/redis/data"
-prepare_data_dir rabbitmq:4.3.4-management "$KUNLUN_ROOT/middleware/rabbitmq/data"
-prepare_data_dir minio/minio:RELEASE.2025-07-18T21-56-31Z "$KUNLUN_ROOT/middleware/minio/data"
+if grep -qx mysql "$KUNLUN_ROOT/middleware.list"; then
+  install -d -m 0755 "$KUNLUN_ROOT/middleware/mysql/conf.d"
+  install -d -m 0755 "$KUNLUN_ROOT/middleware/mysql/init"
+fi
 
-log '四个中间件数据目录权限已初始化。'
+log '中间件数据目录权限已初始化。'
 find "$KUNLUN_ROOT/middleware" -maxdepth 3 -type d -printf '%u:%g %m %p\n' | sort

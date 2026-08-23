@@ -2,8 +2,10 @@ package com.example.offlinedemo.platform.controller;
 
 import com.example.offlinedemo.platform.domain.Models;
 import com.example.offlinedemo.platform.service.BuildService;
+import com.example.offlinedemo.platform.store.BlobStore;
 import com.example.offlinedemo.platform.store.PlatformStore;
 import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -27,10 +29,12 @@ import java.util.Map;
 public class BuildController {
     private final PlatformStore store;
     private final BuildService builds;
+    private final BlobStore blobStore;
 
-    public BuildController(PlatformStore store, BuildService builds) {
+    public BuildController(PlatformStore store, BuildService builds, BlobStore blobStore) {
         this.store = store;
         this.builds = builds;
+        this.blobStore = blobStore;
     }
 
     @GetMapping
@@ -50,9 +54,20 @@ public class BuildController {
     }
 
     @GetMapping("/{id}/download")
-    public ResponseEntity<Resource> download(@PathVariable String id) {
+    public ResponseEntity<Resource> download(@PathVariable String id) throws Exception {
         Models.BuildTask task = store.build(id);
-        if (!"SUCCEEDED".equals(task.status) || task.artifactPath == null)
+        if (!"SUCCEEDED".equals(task.status))
+            throw new IllegalArgumentException("该任务还没有可下载的交付物");
+        String name = task.artifactName == null ? task.targetVersion + ".tar.gz" : task.artifactName;
+        if ("minio".equals(task.artifactStoreType) && task.artifactObjectKey != null) {
+            Resource body = new InputStreamResource(blobStore.open(new BlobStore.BlobRef("minio", task.artifactObjectKey)));
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                    .header(HttpHeaders.CONTENT_DISPOSITION,
+                            ContentDisposition.attachment().filename(name, StandardCharsets.UTF_8).build().toString())
+                    .body(body);
+        }
+        if (task.artifactPath == null)
             throw new IllegalArgumentException("该任务还没有可下载的交付物");
         Path path = Path.of(task.artifactPath).toAbsolutePath().normalize();
         if (!path.startsWith(store.deliveriesRoot().toAbsolutePath().normalize()) || !Files.isRegularFile(path))
@@ -61,7 +76,7 @@ public class BuildController {
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .header(HttpHeaders.CONTENT_DISPOSITION,
-                        ContentDisposition.attachment().filename(path.getFileName().toString(), StandardCharsets.UTF_8).build().toString())
+                        ContentDisposition.attachment().filename(name, StandardCharsets.UTF_8).build().toString())
                 .body(resource);
     }
 

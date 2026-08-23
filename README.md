@@ -2,17 +2,19 @@
 
 ## Web 离线交付平台
 
-当前项目已经从固定示例打包脚本扩展为可视化离线交付平台。平台运行在可访问代码仓库和 Docker Engine 的受控 x86_64 构建机上，生成供无外网 Kylin `x86_64` 服务器使用的离线包。
+当前项目已经从固定示例打包脚本扩展为可视化离线交付平台。平台运行在可访问代码仓库和 Docker Engine（含 Buildx）的受控构建机上，生成供无外网 Kylin V10 `amd64`/`arm64`（飞腾/鲲鹏）服务器使用的离线包。
 
 主要能力：
 
 - 项目以及前后端 Git 仓库配置，支持公开仓库、HTTPS Token、SSH 私钥和单仓库子目录；
-- 锁定实际 Commit，静态分析 Maven、Node、Compose、Dockerfile 和 SQL；
-- 管理 Docker、Compose、MySQL、Redis、RabbitMQ、MinIO 等 `linux/amd64` 离线制品；
-- 按站点配置 MySQL、Redis、RabbitMQ、MinIO 的独立账号密码；
-- 使用 AES-GCM 加密持久化密码，页面和 API 不回显密文；
+- 锁定实际 Commit，静态分析 Maven、Node、Compose、Dockerfile 和 SQL，识别中间件依赖；
+- **中间件注册表**：内置 MySQL、PostgreSQL、人大金仓 KingbaseES、达梦 DM8、瀚高 HighGo、MongoDB、Redis、RabbitMQ、Kafka、RocketMQ、Elasticsearch、MinIO、Nginx、东方通 TongWeb 等 14 类，新增中间件只需加一条目录定义，不写死代码；
+- **双架构目标**：Kylin V10 `amd64` 与 `arm64`，产物命名 `-kylin-v10-<arch>`，贯穿 buildx 构建、镜像 tar、Compose 平台与安装脚本校验；
+- 管理 Docker、Compose 及各类中间件的离线制品（按架构分区）；
+- 按站点配置各中间件独立账号密码，使用 AES-GCM 加密持久化，页面和 API 不回显密文；
 - 异步串行构建，输出实时任务阶段、日志、manifest、镜像清单和 SHA256；
-- 生成完整初始化包或前端/后端应用更新包；数据库迁移默认随应用更新包交付。
+- 生成完整初始化包或前端/后端应用更新包；数据库迁移默认随应用更新包交付；
+- **平台自身入库真实 MySQL、构建产物入 MinIO**（见下方「平台持久化」），未配置时自动回退本地 JSON 与本地文件。
 
 ### 本地开发启动
 
@@ -40,6 +42,19 @@ docker compose -f compose.platform.yml up -d --build
 ```
 
 访问 `http://localhost:8088`。平台后端为了执行镜像构建会挂载 Docker Socket，这等同于主机级构建权限，只能部署在受控构建机，不能直接暴露到公网。代码仓库或额外离线介质目录需要挂载到后端容器后，再填写容器内路径。
+
+### 平台持久化（真实 MySQL + MinIO）
+
+平台自身元数据（项目/配置/制品/构建记录）默认落在本地 `.kunlun-builder/platform-state.json`，构建产物落本地 `deliveries/`。要「对接真实数据库和 MinIO」，设置以下环境变量后重启平台：
+
+| 变量 | 含义 | 示例 |
+|---|---|---|
+| `KUNLUN_METADB_URL` | 平台元数据库 JDBC 地址 | `jdbc:mysql://192.168.149.128:3306/kunlun_platform?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai` |
+| `KUNLUN_METADB_USER` / `KUNLUN_METADB_PASSWORD` | 元数据库账号密码 | `root` / `mrlu` |
+| `KUNLUN_STORAGE_TYPE` | 产物存储后端 | `minio`（缺省 `local`） |
+| `KUNLUN_MINIO_ENDPOINT` / `_ACCESS_KEY` / `_SECRET_KEY` / `_BUCKET` | MinIO 连接 | `http://192.168.149.128:9000` / `mrlu` / `mrlumrlu` / `kunlun-platform` |
+
+设了 `KUNLUN_METADB_URL` 后平台自动 `CREATE TABLE IF NOT EXISTS kunlun_record` 并持久化；未设则回退本地 JSON。设了 `KUNLUN_STORAGE_TYPE=minio` 后制品与交付物 tar 上传到 MinIO，下载走对象存储；未设则回退本地文件。`KUNLUN_SECRET_KEY`（或 `.kunlun-builder/master.key`）仍作为凭据加密密钥，**不落库**，务必随平台部署一并保留，丢失后旧密文不可恢复。
 
 ### 推荐使用顺序
 
