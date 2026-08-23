@@ -54,7 +54,7 @@ public class CommandRunner {
         reader.join(5000);
         Result result = new Result(process.exitValue(), String.join(System.lineSeparator(), lines));
         if (result.exitCode != 0) {
-            throw new CommandFailedException("命令执行失败（" + result.exitCode + "）：" + display(command), result);
+            throw new CommandFailedException(failureMessage(command, result), result);
         }
         return result;
     }
@@ -62,6 +62,14 @@ public class CommandRunner {
     public Result run(List<String> command, Path workingDirectory, Consumer<String> output)
             throws IOException, InterruptedException {
         return run(command, workingDirectory, Map.of(), output);
+    }
+
+    /** 失败信息附上命令的真实输出，便于上层（如分析失败时看不到日志的场景）定位根因。 */
+    private String failureMessage(List<String> command, Result result) {
+        String output = result.output() == null ? "" : result.output().trim();
+        if (output.length() > 2000) output = output.substring(0, 2000) + "…(已截断)";
+        return "命令执行失败（" + result.exitCode + "）：" + display(command)
+                + (output.isBlank() ? "" : System.lineSeparator() + output);
     }
 
     private String display(List<String> command) {

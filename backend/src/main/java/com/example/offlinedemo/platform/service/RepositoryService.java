@@ -61,8 +61,7 @@ public class RepositoryService {
         try {
             logger.accept("拉取 " + repository.role + " 仓库，目标引用：" + defaultValue(repository.ref, "HEAD"));
             // --no-local 避免本地仓库克隆使用硬链接，把源仓库 .git 的只读 ACL 带入工作目录。
-            commands.run(List.of("git", "clone", "--no-checkout", "--no-local", "--", repository.url, target.toString()),
-                    workspace, environment, logger);
+            cloneWithRetry(repository, target, workspace, environment, logger);
 
             String requestedRef = defaultValue(repository.ref, "HEAD");
             String resolvedRef = requestedRef;
@@ -86,6 +85,36 @@ public class RepositoryService {
         } finally {
             cleanupCredentialFiles(environment);
         }
+    }
+
+    /**
+     * 克隆仓库，针对 GitHub HTTPS 偶发“Connection reset by peer”自动重试。
+     * 每次重试前清空目标目录残留，避免 git 报“destination path already exists”。
+     */
+    private void cloneWithRetry(Models.RepositoryConfig repository, Path target, Path workspace,
+                                Map<String, String> environment, Consumer<String> logger) throws Exception {
+        List<String> command = List.of("git", "clone", "--no-checkout", "--no-local", "--",
+                repository.url, target.toString());
+        int maxAttempts = 3;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                commands.run(command, workspace, environment, logger);
+                return;
+            } catch (IOException failure) {
+                if (attempt >= maxAttempts) throw failure;
+                try { FileSupport.deleteTree(workspace, target); } catch (IOException ignored) {}
+                long backoffMillis = attempt * 1000L;
+                logger.accept(repository.role + " 仓库克隆失败（第 " + attempt + "/" + maxAttempts + " 次），"
+                        + backoffMillis + "ms 后重试：" + firstLine(failure.getMessage()));
+                Thread.sleep(backoffMillis);
+            }
+        }
+    }
+
+    private String firstLine(String message) {
+        if (message == null) return "";
+        int newline = message.indexOf(System.lineSeparator());
+        return newline < 0 ? message : message.substring(0, newline);
     }
 
     private Map<String, String> credentialEnvironment(Models.RepositoryConfig repository, Path workspace,
