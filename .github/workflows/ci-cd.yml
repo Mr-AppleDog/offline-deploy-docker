@@ -25,7 +25,10 @@ jobs:
           ok=0
           for attempt in 1 2 3 4 5; do
             echo "clone 第 ${attempt} 次"
-            rm -rf .git
+            # 清空上一次残留(含未提交的 kustomize 改动),git clone 需要空目录。
+            shopt -s dotglob
+            rm -rf ./*
+            shopt -u dotglob
             if git clone --depth 1 "$repo" .; then ok=1; break; fi
             sleep 10
           done
