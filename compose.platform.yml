@@ -3,7 +3,8 @@ name: kunlun-package-studio
 services:
   backend:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       KUNLUN_PLATFORM_DATA_DIR: /data
       KUNLUN_PROJECT_ROOT: /workspace
@@ -12,7 +13,6 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - ./.kunlun-builder:/data
-      - ./:/workspace:ro
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 

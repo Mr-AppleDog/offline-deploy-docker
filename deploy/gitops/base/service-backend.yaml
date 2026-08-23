@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  # 名字固定为 backend:frontend 的 nginx.conf 里 proxy_pass http://backend:8080
+  # 直接解析这个 Service 的 DNS,无需改动前端。
+  name: backend
+spec:
+  selector:
+    app: kunlun-backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kunlun-backend
+  labels:
+    app: kunlun-backend
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: kunlun-backend
+  template:
+    metadata:
+      labels:
+        app: kunlun-backend
+    spec:
+      # 特权构建引擎:挂载 host docker.sock 去执行 buildx / git clone,等价主机级构建权限。
+      # 仅部署在受控 LAN 构建节点,勿暴露公网。
+      containers:
+        - name: kunlun-backend
+          # 逻辑名,由 overlays/staging 的 images 改写为
+          # localhost:5000/kunlun-backend:<tag>;实际 tag 由 CI workflow 在线覆盖。
+          image: kunlun-backend:placeholder
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: KUNLUN_PLATFORM_DATA_DIR
+              value: /data
+            - name: KUNLUN_PROJECT_ROOT
+              value: /workspace
+            - name: TZ
+              value: Asia/Shanghai
+            - name: KUNLUN_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kunlun-admin-token
+                  key: KUNLUN_ADMIN_TOKEN
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /api/health/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+        - name: data
+          persistentVolumeClaim:
+            claimName: kunlun-data

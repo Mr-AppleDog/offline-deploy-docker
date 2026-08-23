@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kunlun-staging
+  namespace: argocd
+spec:
+  project: default
+  source:
+    # 单仓库 GitOps:Argo 只读 deploy/staging 分支(部署状态分支)的 staging overlay。
+    # main(代码)保持干净,部署 tag 提交只进 deploy/staging。
+    # 当前节点访问 github 间歇不稳,实际部署走 workflow 的 kubectl apply -k;
+    # 此 Application 仅作 GitOps 记录参考,未启用 Argo 自动同步。
+    repoURL: https://github.com/Mr-AppleDog/offline-deploy-docker.git
+    targetRevision: deploy/staging
+    path: deploy/gitops/overlays/staging
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kunlun
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true

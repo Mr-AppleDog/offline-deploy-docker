@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kunlun-frontend
+  labels:
+    app: kunlun-frontend
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: kunlun-frontend
+  template:
+    metadata:
+      labels:
+        app: kunlun-frontend
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kunlun-frontend
+          image: kunlun-frontend:placeholder
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          securityContext:
+            # nginx 以 root 起并 chown 缓存目录,不能 drop 全部 capability(需 CAP_CHOWN),
+            # 故这里不 drop ALL,仅禁用提权,避免踩 DocLoom 记录过的坑。
+            allowPrivilegeEscalation: false
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
