@@ -6,6 +6,7 @@ import com.example.offlinedemo.platform.security.CryptoService;
 import com.example.offlinedemo.platform.store.PlatformStore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -49,6 +50,7 @@ public class ApplicationRegistryService {
     private final PlatformProperties properties;
     private volatile HttpClient http;
 
+    @Autowired
     public ApplicationRegistryService(PlatformStore store, CryptoService crypto, ObjectMapper objectMapper,
                                       PlatformProperties properties) {
         this(store, crypto, objectMapper, properties, null);
