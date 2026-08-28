@@ -10,7 +10,7 @@ api.interceptors.request.use(config => {
 })
 api.interceptors.response.use(response => response, async error => {
   if (error.response?.status === 401 && !error.config?._tokenRetried) {
-    const token = prompt('请输入 Kunlun 平台管理令牌')
+    const token = prompt('请输入离线交付平台管理令牌')
     if (token) {
       localStorage.setItem('kunlun-admin-token', token)
       error.config._tokenRetried = true
@@ -173,7 +173,7 @@ onBeforeUnmount(() => clearInterval(poller))
 <template>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">K</span><div><strong>Kunlun</strong><small>离线交付平台</small></div></div>
+      <div class="brand"><span class="brand-mark">交</span><div><strong>离线交付平台</strong><small>部署包构建与制品管理</small></div></div>
       <nav><button v-for="item in nav" :key="item.key" :class="{ active: active === item.key }" @click="switchNav(item.key)"><span>{{ item.icon }}</span>{{ item.label }}<b v-if="item.key === 'builds' && dashboard.runningBuilds">{{ dashboard.runningBuilds }}</b></button></nav>
       <div class="arch"><i></i><span>目标架构</span><strong>{{ targets.length ? targets.map(t => t.arch).join(' / ') : 'amd64' }}</strong></div>
     </aside>

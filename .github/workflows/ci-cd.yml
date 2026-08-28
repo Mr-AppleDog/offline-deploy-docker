@@ -1,4 +1,4 @@
-name: CI/CD (Kunlun, GitOps deploy 分支)
+name: CI/CD (Offline Delivery, GitOps deploy 分支)
 
 # 推 main 触发;CI 用 kubectl apply -k 直推部署(绕开 Argo fetch 不稳),
 # deploy/staging 回写降级为 best-effort(GitOps 记录)。main 保持干净。
@@ -14,8 +14,8 @@ jobs:
   build-deploy:
     runs-on: [self-hosted, linux, x64]
     env:
-      BACKEND_IMAGE: localhost:5000/kunlun-backend
-      FRONTEND_IMAGE: localhost:5000/kunlun-frontend
+      BACKEND_IMAGE: localhost:5000/offline-delivery-backend
+      FRONTEND_IMAGE: localhost:5000/offline-delivery-frontend
       # github.com HTTPS 在本节点被重置(Recv failure),统一走 SSH 部署密钥拉取/推送。
       GIT_SSH_COMMAND: "ssh -i /home/mrlu/.ssh/kunlun_deploy -o StrictHostKeyChecking=accept-new"
     steps:
@@ -94,9 +94,9 @@ jobs:
           export PATH=/usr/local/bin:$PATH
           kubectl kustomize deploy/gitops/overlays/staging > /tmp/rendered.yaml
           test -s /tmp/rendered.yaml
-          grep -q "localhost:5000/kunlun-backend:$TAG" /tmp/rendered.yaml \
+          grep -q "localhost:5000/offline-delivery-backend:$TAG" /tmp/rendered.yaml \
             || { echo "渲染后后端镜像未替换为本次 sha"; exit 1; }
-          grep -q "localhost:5000/kunlun-frontend:$TAG" /tmp/rendered.yaml \
+          grep -q "localhost:5000/offline-delivery-frontend:$TAG" /tmp/rendered.yaml \
             || { echo "渲染后前端镜像未替换为本次 sha"; exit 1; }
 
       - name: kubectl 直推部署(apply -k, 绕开 Argo fetch 不稳)
@@ -104,10 +104,10 @@ jobs:
           KUBECONFIG: /home/mrlu/.kube/config
         run: |
           export PATH=/usr/local/bin:$PATH
-          kubectl create namespace kunlun 2>/dev/null || true
+          kubectl create namespace offline-delivery 2>/dev/null || true
           kubectl apply -k deploy/gitops/overlays/staging
-          kubectl rollout status deployment/kunlun-backend -n kunlun --timeout=300s
-          kubectl rollout status deployment/kunlun-frontend -n kunlun --timeout=300s
+          kubectl rollout status deployment/offline-delivery-backend -n offline-delivery --timeout=300s
+          kubectl rollout status deployment/offline-delivery-frontend -n offline-delivery --timeout=300s
 
       - name: 冒烟测试(NodePort 30088)
         run: |
@@ -121,7 +121,7 @@ jobs:
             sleep 2
           done
           echo "smoke: 60s 内未达到 200 (frontend=$front, api=$api)" >&2
-          kubectl get pods -n kunlun -o wide
+          kubectl get pods -n offline-delivery -o wide
           exit 1
 
       - name: 回写 deploy/staging(GitOps 记录, best-effort)

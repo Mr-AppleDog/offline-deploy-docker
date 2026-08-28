@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kunlun-frontend
+  name: offline-delivery-frontend
   labels:
-    app: kunlun-frontend
+    app: offline-delivery-frontend
 spec:
   replicas: 1
   revisionHistoryLimit: 5
@@ -14,18 +14,18 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app: kunlun-frontend
+      app: offline-delivery-frontend
   template:
     metadata:
       labels:
-        app: kunlun-frontend
+        app: offline-delivery-frontend
     spec:
       securityContext:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: kunlun-frontend
-          image: kunlun-frontend:placeholder
+        - name: offline-delivery-frontend
+          image: offline-delivery-frontend:placeholder
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

@@ -21,7 +21,7 @@ public class ComposeRenderer {
                              Map<String, String> versions, Models.BuildTarget target) {
         StringBuilder sb = new StringBuilder();
         sb.append("name: kunlun-middleware\n\n");
-        sb.append("# 由 Kunlun 离线交付平台生成。该文件含站点专属凭据，必须以 0600 保存。\n");
+        sb.append("# 由离线交付平台生成。该文件含站点专属凭据，必须以 0600 保存。\n");
         appendAnchors(sb, resolved, selected);
         sb.append("\nx-common: &common\n");
         appendCommon(sb, target.ociPlatform());
@@ -40,7 +40,7 @@ public class ComposeRenderer {
                               Models.BuildTarget target) {
         StringBuilder sb = new StringBuilder();
         sb.append("name: kunlun-app\n\n");
-        sb.append("# 由 Kunlun 离线交付平台生成。必须与在线 middleware Compose 的凭据一致。\n");
+        sb.append("# 由离线交付平台生成。必须与在线 middleware Compose 的凭据一致。\n");
         appendAnchors(sb, resolved, selected);
         sb.append("\nx-common: &common\n");
         appendCommon(sb, target.ociPlatform());

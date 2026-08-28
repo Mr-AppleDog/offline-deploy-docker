@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit;
 @RestController
 public class SystemController {
     @GetMapping("/api/health/live")
-    public Map<String, Object> live() { return Map.of("ok", true, "service", "kunlun-package-studio"); }
+    public Map<String, Object> live() { return Map.of("ok", true, "service", "offline-delivery-studio"); }
 
     @GetMapping("/api/platform/system")
     public Map<String, Object> system() {

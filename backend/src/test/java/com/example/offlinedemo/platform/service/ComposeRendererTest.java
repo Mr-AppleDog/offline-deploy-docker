@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,7 +60,7 @@ class ComposeRendererTest {
                 "mysql", "8.4.11", "redis", "8.2.8", "rabbitmq", "4.3.4-management",
                 "minio", "RELEASE.2025-07-18T21-56-31Z"), Models.BuildTarget.defaultTarget());
         String application = renderer.application(resolved, "kunlun-app", "1.1.1", "1.1.2",
-                "/actuator/health", "/", entries(resolved), Models.BuildTarget.defaultTarget());
+                "/actuator/health", "/", entries(resolved), Set.of("app-backend", "app-frontend"), Models.BuildTarget.defaultTarget());
 
         assertThat(middleware).contains("x-kunlun-mysql-password", "mysql-password-123",
                 "redis-password-123", "rabbit-password-123", "minio-password-123",
@@ -78,7 +79,7 @@ class ComposeRendererTest {
                 "mysql", "8.4.11", "redis", "8.2.8", "rabbitmq", "4.3.4-management",
                 "minio", "RELEASE.2025-07-18T21-56-31Z"), target);
         String application = renderer.application(resolved, "kunlun-app", "1.1.1", "1.1.2",
-                "/actuator/health", "/", entries(resolved), target);
+                "/actuator/health", "/", entries(resolved), Set.of("app-backend", "app-frontend"), target);
 
         assertThat(middleware).contains("platform: linux/arm64");
         assertThat(application).contains("platform: linux/arm64");
@@ -105,7 +106,7 @@ class ComposeRendererTest {
                 "mysql", "8.4.11", "kingbase", "V8R6", "minio", "RELEASE.2025-07-18T21-56-31Z"),
                 Models.BuildTarget.defaultTarget());
         String application = renderer.application(resolved, "kunlun-app", "1.1.1", "1.1.1",
-                "/actuator/health", "/", entries(resolved), Models.BuildTarget.defaultTarget());
+                "/actuator/health", "/", entries(resolved), Set.of("app-backend", "app-frontend"), Models.BuildTarget.defaultTarget());
 
         assertThat(middleware).contains("kingbase:", "image: kingbase:V8R6",
                 "x-kunlun-kingbase-password", "king-password-123");

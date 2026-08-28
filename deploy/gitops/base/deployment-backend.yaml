@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kunlun-backend
+  name: offline-delivery-backend
   labels:
-    app: kunlun-backend
+    app: offline-delivery-backend
 spec:
   replicas: 1
   revisionHistoryLimit: 5
@@ -14,19 +14,19 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app: kunlun-backend
+      app: offline-delivery-backend
   template:
     metadata:
       labels:
-        app: kunlun-backend
+        app: offline-delivery-backend
     spec:
       # 特权构建引擎:挂载 host docker.sock 去执行 buildx / git clone,等价主机级构建权限。
       # 仅部署在受控 LAN 构建节点,勿暴露公网。
       containers:
-        - name: kunlun-backend
+        - name: offline-delivery-backend
           # 逻辑名,由 overlays/staging 的 images 改写为
-          # localhost:5000/kunlun-backend:<tag>;实际 tag 由 CI workflow 在线覆盖。
-          image: kunlun-backend:placeholder
+          # localhost:5000/offline-delivery-backend:<tag>;实际 tag 由 CI workflow 在线覆盖。
+          image: offline-delivery-backend:placeholder
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true
@@ -43,7 +43,7 @@ spec:
             - name: KUNLUN_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: kunlun-admin-token
+                  name: offline-delivery-admin-token
                   key: KUNLUN_ADMIN_TOKEN
           volumeMounts:
             - name: docker-sock
@@ -78,4 +78,4 @@ spec:
             type: Socket
         - name: data
           persistentVolumeClaim:
-            claimName: kunlun-data
+            claimName: offline-delivery-data

@@ -3,7 +3,7 @@ server:
 
 spring:
   application:
-    name: kunlun-package-studio
+    name: offline-delivery-studio
   autoconfigure:
     exclude:
       - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration

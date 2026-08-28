@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: kunlun-staging
+  name: offline-delivery-staging
   namespace: argocd
 spec:
   project: default
@@ -15,7 +15,7 @@ spec:
     path: deploy/gitops/overlays/staging
   destination:
     server: https://kubernetes.default.svc
-    namespace: kunlun
+    namespace: offline-delivery
   syncPolicy:
     automated:
       prune: false
