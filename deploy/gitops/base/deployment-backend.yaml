@@ -8,10 +8,9 @@ spec:
   replicas: 1
   revisionHistoryLimit: 5
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    # 后端挂载同一个 RWO 数据卷且仅运行 1 个副本；发布时先停旧 Pod，
+    # 避免 RollingUpdate(maxSurge=1) 临时并存两个后端实例。
+    type: Recreate
   selector:
     matchLabels:
       app: offline-delivery-backend

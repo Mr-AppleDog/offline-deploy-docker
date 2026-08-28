@@ -137,8 +137,25 @@ jobs:
           export PATH=/usr/local/bin:$PATH
           kubectl create namespace offline-delivery 2>/dev/null || true
           kubectl apply -k deploy/gitops/overlays/staging
-          kubectl rollout status deployment/offline-delivery-backend -n offline-delivery --timeout=300s
-          kubectl rollout status deployment/offline-delivery-frontend -n offline-delivery --timeout=300s
+
+          rollout() {
+            deployment="$1"
+            if kubectl rollout status "deployment/$deployment" -n offline-delivery --timeout=300s; then
+              return 0
+            fi
+
+            echo "::group::${deployment} rollout 诊断"
+            kubectl get deployment "$deployment" -n offline-delivery -o wide || true
+            kubectl get replicaset,pod -n offline-delivery -l "app=$deployment" -o wide || true
+            kubectl describe deployment "$deployment" -n offline-delivery || true
+            kubectl describe pod -n offline-delivery -l "app=$deployment" || true
+            kubectl get events -n offline-delivery --sort-by=.lastTimestamp | tail -n 100 || true
+            echo "::endgroup::"
+            return 1
+          }
+
+          rollout offline-delivery-backend
+          rollout offline-delivery-frontend
 
       - name: 冒烟测试(NodePort 30088)
         run: |
