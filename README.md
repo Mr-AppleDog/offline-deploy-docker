@@ -7,8 +7,8 @@
 主要能力：
 
 - **项目是首要入口**：创建时固定 `amd64`（x86）或 `arm64`（ARM），并绑定一个前端 Git 仓库和一个后端 Git 仓库；
-- **应用镜像仓库**：前端、后端分别绑定 Registry 服务地址和镜像路径，浏览标签后直接选择；支持公开仓库和用户名 + 密码/Token 私有仓库；
-- **应用镜像可追溯**：Registry 导出或手工上传的前后端 TAR 都必须绑定项目、角色、版本和 Git commit；
+- **应用镜像仓库**：平台从 `100.113.245.88:5000` 的 Registry 目录按项目 `appKey` 自动匹配 `<appKey>-backend` 与 `<appKey>-frontend`（兼容 `<appKey>-ui`），无需手工填写地址或路径；
+- **应用镜像可追溯**：Registry 导出或手工上传的前后端 TAR 都会绑定项目、角色、版本和 Git commit；commit 优先从镜像标签/文件名中的 `sha-*` 识别，否则自动读取绑定仓库 Git Ref 的最新提交；
 - **中间件 TAR 制作**：在独立页面选择 MySQL/PostgreSQL/Redis 等组件、版本和架构，平台执行 `docker pull --platform`、架构校验与 `docker save`；
 - **数据库脚本库**：初始化 SQL（随 bootstrap 包入 `database/init`）与迁移 SQL（入 `database/migrations/<版本>`）分类入库，构建时按目标版本选择入包；
 - **中间件注册表**：内置 MySQL、PostgreSQL、人大金仓 KingbaseES、达梦 DM8、瀚高 HighGo、MongoDB、Redis、RabbitMQ、Kafka、RocketMQ、Elasticsearch、MinIO、Nginx、东方通 TongWeb 等 14 类，新增中间件只需加一条目录定义，不写死代码；
@@ -60,7 +60,7 @@ docker compose -f compose.platform.yml up -d --build
 ### 推荐使用顺序
 
 1. 在“项目”创建项目并固定 x86/ARM 架构，再分别绑定前端、后端 Git 仓库。
-2. 为前端、后端绑定 Docker Registry 地址与镜像路径，从标签列表选择镜像并填写对应 Git commit；已有 `docker save` TAR 仍可直接上传。
+2. 点击“自动读取”绑定前后端 Registry 仓库，再从按创建时间排序的列表选择镜像；列表会显示镜像时间、架构、大小、digest 与 Git commit。已有 `docker save` TAR 仍可直接上传。
 3. 在“部署配置”创建与项目同架构的站点配置并勾选中间件；若制品库缺少目标版本，到“中间件制作”页生成 TAR。
 4. 在“离线制品库”上传 Docker Engine、Compose 等基础介质；在“数据库脚本库”上传初始化 / 迁移 SQL。
 5. 从项目页进入构建，逐项选择应用、基础设施和中间件制品版本并提交任务。

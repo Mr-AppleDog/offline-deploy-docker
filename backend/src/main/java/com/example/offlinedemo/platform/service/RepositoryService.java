@@ -13,8 +13,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Consumer;
 
 @Service
@@ -47,6 +50,79 @@ public class RepositoryService {
             try { FileSupport.deleteTree(store.workspacesRoot(), workspace); } catch (IOException ignored) {}
             throw e;
         }
+    }
+
+    /**
+     * 轻量读取项目指定角色仓库的远端 commit，不克隆工作树。优先解析配置的分支，
+     * 也支持 HEAD、完整 refs/heads/* 与 refs/tags/*（附注标签取解引用后的 commit）。
+     */
+    public ResolvedCommit resolveCommit(String projectId, String role) throws Exception {
+        Models.Project project = store.project(projectId);
+        String normalizedRole = role == null ? "" : role.trim().toUpperCase(Locale.ROOT);
+        if (!List.of("FRONTEND", "BACKEND").contains(normalizedRole))
+            throw new IllegalArgumentException("仓库角色只支持 FRONTEND 或 BACKEND");
+        Models.RepositoryConfig repository = project.repositories.stream()
+                .filter(value -> normalizedRole.equals(value.role)).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("请先为项目绑定 " + normalizedRole + " Git 仓库"));
+        if (repository.url == null || repository.url.isBlank() || repository.url.startsWith("-"))
+            throw new IllegalArgumentException("仓库地址无效：" + normalizedRole);
+
+        String requestedRef = defaultValue(repository.ref, "HEAD");
+        String normalizedRef = defaultRef(requestedRef);
+        if (normalizedRef.matches("^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$"))
+            return new ResolvedCommit(normalizedRole, repository.id, repository.url, requestedRef,
+                    normalizedRef.toLowerCase(Locale.ROOT));
+
+        Path workspace = FileSupport.safeResolve(store.workspacesRoot(),
+                "git-resolve/" + project.id + "-" + UUID.randomUUID(), "Git Commit 查询目录");
+        Map<String, String> environment = Map.of();
+        try {
+            Files.createDirectories(workspace);
+            environment = credentialEnvironment(repository, workspace, normalizedRole.toLowerCase(Locale.ROOT));
+            List<String> command = new ArrayList<>(List.of("git", "ls-remote", "--exit-code", "--", repository.url));
+            command.addAll(refPatterns(requestedRef));
+            String output = commands.run(command, workspace, environment, null).output();
+            String commit = selectCommit(output, requestedRef);
+            if (commit == null)
+                throw new IllegalArgumentException("仓库中找不到引用 " + requestedRef + "：" + repository.url);
+            return new ResolvedCommit(normalizedRole, repository.id, repository.url, requestedRef, commit);
+        } finally {
+            cleanupCredentialFiles(environment);
+            try { FileSupport.deleteTree(store.workspacesRoot(), workspace); } catch (IOException ignored) {}
+        }
+    }
+
+    static String selectCommit(String output, String requestedRef) {
+        Map<String, String> refs = new LinkedHashMap<>();
+        if (output != null) {
+            for (String line : output.lines().toList()) {
+                String[] parts = line.trim().split("\\s+", 2);
+                if (parts.length == 2 && parts[0].matches("^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$"))
+                    refs.put(parts[1], parts[0].toLowerCase(Locale.ROOT));
+            }
+        }
+        String value = defaultRef(requestedRef);
+        List<String> preferred;
+        if ("HEAD".equalsIgnoreCase(value)) preferred = List.of("HEAD");
+        else if (value.startsWith("refs/tags/")) preferred = List.of(value + "^{}", value);
+        else if (value.startsWith("refs/")) preferred = List.of(value);
+        else preferred = List.of("refs/heads/" + value, "refs/tags/" + value + "^{}", "refs/tags/" + value, value);
+        for (String ref : preferred) if (refs.containsKey(ref)) return refs.get(ref);
+        return null;
+    }
+
+    private static List<String> refPatterns(String requestedRef) {
+        String value = defaultRef(requestedRef);
+        if ("HEAD".equalsIgnoreCase(value)) return List.of("HEAD");
+        if (value.startsWith("refs/tags/")) return List.of(value, value + "^{}");
+        if (value.startsWith("refs/")) return List.of(value);
+        return List.of(value, "refs/heads/" + value, "refs/tags/" + value, "refs/tags/" + value + "^{}");
+    }
+
+    private static String defaultRef(String value) {
+        String ref = value == null || value.isBlank() ? "HEAD" : value.trim();
+        if (ref.startsWith("refs/remotes/origin/")) return ref.substring("refs/remotes/origin/".length());
+        return ref.startsWith("origin/") ? ref.substring("origin/".length()) : ref;
     }
 
     private RepositorySnapshot cloneOne(Models.RepositoryConfig repository, Path workspace,
@@ -170,4 +246,6 @@ public class RepositoryService {
 
     public record RepositorySnapshot(String role, Path repositoryRoot, Path contextRoot,
                                      String commit, String dockerfile) {}
+    public record ResolvedCommit(String role, String repositoryId, String repositoryUrl,
+                                 String ref, String commit) {}
 }

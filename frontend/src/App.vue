@@ -23,15 +23,17 @@ const projects = ref([]), profiles = ref([]), artifacts = ref([]), sqlScripts = 
 const selectedProjectId = ref(''), selectedBuildId = ref(''), buildLog = ref('')
 const selectedImageExportId = ref(''), imageExportLog = ref('')
 const showProjectForm = ref(false), showProfileForm = ref(false), showRepositoryForm = ref(false), showApplicationForm = ref(false)
-const showImageRegistryForm = ref(false), showRegistryImageForm = ref(false), registryTagsLoading = ref(false)
+const showRegistryImageForm = ref(false), registryTagsLoading = ref(false), registryBinding = ref(false)
+const applicationCommitLoading = ref(false), registryCommitLoading = ref(false)
+const applicationLatestCommit = ref(''), registryLatestCommit = ref('')
+const applicationCommitSource = ref(''), registryCommitSource = ref('')
 const showArtifactForm = ref(false), showBuildForm = ref(false), showSqlForm = ref(false)
 
 const projectForm = reactive({ id: '', name: '', appKey: '', description: '', currentVersion: '1.0.0', targetOs: 'kylin-v10', targetArch: 'amd64', backendHealthPath: '/api/health/live', frontendHealthPath: '/' })
 const repositoryForm = reactive({ id: '', projectId: '', role: 'BACKEND', url: '', ref: 'main', subdirectory: '.', dockerfile: 'Dockerfile', authType: 'NONE', username: '', secret: '' })
 const applicationForm = reactive({ projectId: '', role: 'BACKEND', version: '1.0.0', gitCommit: '', file: null })
-const imageRegistryForm = reactive({ id: '', projectId: '', role: 'BACKEND', registryUrl: '', repository: '', authType: 'NONE', username: '', secret: '' })
 const registryImageForm = reactive({ projectId: '', role: 'BACKEND', registryId: '', tag: '', version: '', gitCommit: '', targetOs: 'kylin-v10', targetArch: 'amd64' })
-const registryTags = ref([])
+const registryImages = ref([]), unavailableRegistryTags = ref([]), registryCatalogRepository = ref('')
 const profileForm = reactive({
   id: '', name: '', environment: '生产环境', targetOs: 'kylin-v10', targetArch: 'amd64',
   frontendPort: 80, timezone: 'Asia/Shanghai', javaOptions: '-Xms256m -Xmx1024m', middleware: []
@@ -48,6 +50,7 @@ const buildForm = reactive({
 const selectedProject = computed(() => projects.value.find(p => p.id === selectedProjectId.value))
 const selectedBuild = computed(() => builds.value.find(b => b.id === selectedBuildId.value))
 const selectedImageExport = computed(() => imageExportTasks.value.find(t => t.id === selectedImageExportId.value))
+const selectedRegistryImage = computed(() => registryImages.value.find(image => image.tag === registryImageForm.tag))
 const middlewareImageExportTasks = computed(() => imageExportTasks.value.filter(t => !t.applicationRole))
 const buildProject = computed(() => projects.value.find(p => p.id === buildForm.projectId))
 const compatibleProfiles = computed(() => profiles.value.filter(p => !buildProject.value || p.targetArch === buildProject.value.targetArch))
@@ -102,39 +105,97 @@ function openRepositoryForm(role) {
 async function saveRepository() {
   try { const path = repositoryForm.id ? `/projects/${repositoryForm.projectId}/repositories/${repositoryForm.id}` : `/projects/${repositoryForm.projectId}/repositories`; repositoryForm.id ? await api.put(path, { ...repositoryForm }) : await api.post(path, { ...repositoryForm }); showRepositoryForm.value = false; notify('Git 仓库已绑定'); await loadAll(true) } catch (error) { notify(errorMessage(error), 'error') }
 }
-function openImageRegistryForm(role) {
-  const existing = imageRegistryFor(selectedProject.value, role)
-  Object.assign(imageRegistryForm, existing
-    ? { ...existing, projectId: selectedProject.value.id, secret: '' }
-    : { id: '', projectId: selectedProject.value.id, role, registryUrl: '', repository: `${selectedProject.value.appKey}-${role.toLowerCase()}`, authType: 'NONE', username: '', secret: '' })
-  showImageRegistryForm.value = true
+function commitHint(value) {
+  const text = String(value || '')
+  const tagged = text.match(/(?:^|[-_.])sha[-_.]?([0-9a-f]{7,64})(?=$|[-_.])/i)
+  const plain = text.match(/^([0-9a-f]{7,64})$/i)
+  return (tagged?.[1] || plain?.[1] || '').toLowerCase()
 }
-async function saveImageRegistry() {
+async function fetchLatestCommit(projectId, role) {
+  return (await api.get(`/projects/${projectId}/repositories/${role}/latest-commit`)).data
+}
+async function refreshApplicationCommit(force = false) {
+  applicationCommitLoading.value = true
   try {
-    const base = `/projects/${imageRegistryForm.projectId}/image-registries`
-    imageRegistryForm.id ? await api.put(`${base}/${imageRegistryForm.id}`, { ...imageRegistryForm }) : await api.post(base, { ...imageRegistryForm })
-    showImageRegistryForm.value = false; notify('应用镜像仓库已绑定'); await loadAll(true)
-  } catch (error) { notify(errorMessage(error), 'error') }
+    const resolved = await fetchLatestCommit(applicationForm.projectId, applicationForm.role)
+    applicationLatestCommit.value = resolved.commit
+    const fromFile = commitHint(applicationForm.file?.name)
+    if (force || !fromFile) {
+      applicationForm.gitCommit = resolved.commit
+      applicationCommitSource.value = `${resolved.ref} 最新提交`
+    }
+  } catch (error) {
+    applicationCommitSource.value = '自动获取失败'
+    notify(errorMessage(error), 'error')
+  } finally { applicationCommitLoading.value = false }
 }
-async function removeImageRegistry() {
-  if (!imageRegistryForm.id || !confirm('确定解除这个应用镜像仓库绑定吗？')) return
-  try { await api.delete(`/projects/${imageRegistryForm.projectId}/image-registries/${imageRegistryForm.id}`); showImageRegistryForm.value = false; notify('镜像仓库绑定已解除'); await loadAll(true) } catch (error) { notify(errorMessage(error), 'error') }
+async function refreshRegistryCommit(force = false) {
+  const fromImage = selectedRegistryImage.value?.gitCommit || commitHint(registryImageForm.tag)
+  if (!force && fromImage) {
+    registryImageForm.gitCommit = fromImage
+    registryCommitSource.value = selectedRegistryImage.value?.gitSource || '从镜像标签自动识别'
+    return
+  }
+  registryCommitLoading.value = true
+  try {
+    const resolved = await fetchLatestCommit(registryImageForm.projectId, registryImageForm.role)
+    registryLatestCommit.value = resolved.commit
+    if (force || !fromImage) {
+      registryImageForm.gitCommit = resolved.commit
+      registryCommitSource.value = `${resolved.ref} 最新提交`
+    }
+  } catch (error) {
+    registryCommitSource.value = '自动获取失败'
+    notify(errorMessage(error), 'error')
+  } finally { registryCommitLoading.value = false }
+}
+async function syncImageRegistries(showNotice = true) {
+  const project = selectedProject.value
+  if (!project || registryBinding.value) return false
+  registryBinding.value = true
+  try {
+    await api.post(`/projects/${project.id}/image-registries/auto-bind`)
+    await loadAll(true)
+    if (showNotice) notify('已从 100.113.245.88:5000 自动读取并绑定前后端仓库')
+    return true
+  } catch (error) {
+    notify(errorMessage(error), 'error')
+    return false
+  } finally { registryBinding.value = false }
 }
 async function openRegistryImageForm(role) {
-  const project = selectedProject.value
-  const registry = imageRegistryFor(project, role)
+  let project = selectedProject.value
   if (!repositoryFor(project, role)) { notify(`请先绑定${role === 'BACKEND' ? '后端' : '前端'} Git 仓库`, 'error'); return }
-  if (!registry) { openImageRegistryForm(role); return }
+  if (!await syncImageRegistries(false)) return
+  project = selectedProject.value
+  const registry = imageRegistryFor(project, role)
+  if (!registry) { notify('Registry 中没有找到对应的应用镜像仓库', 'error'); return }
   Object.assign(registryImageForm, { projectId: project.id, role, registryId: registry.id, tag: '', version: project.currentVersion || '', gitCommit: '', targetOs: project.targetOs, targetArch: project.targetArch })
-  registryTags.value = []; showRegistryImageForm.value = true; registryTagsLoading.value = true
+  registryLatestCommit.value = ''; registryCommitSource.value = ''
+  registryImages.value = []; unavailableRegistryTags.value = []; registryCatalogRepository.value = ''
+  showRegistryImageForm.value = true; registryTagsLoading.value = true
   try {
-    registryTags.value = (await api.get(`/projects/${project.id}/image-registries/${registry.id}/tags`)).data.tags || []
-    if (registryTags.value.length) { registryImageForm.tag = registryTags.value[0]; useRegistryTag() }
+    const data = (await api.get(`/projects/${project.id}/image-registries/${registry.id}/tags`)).data
+    registryImages.value = data.images || []
+    unavailableRegistryTags.value = data.unavailableTags || []
+    registryCatalogRepository.value = data.repository || ''
+    if (registryImages.value.length) { registryImageForm.tag = registryImages.value[0].tag; useRegistryTag() }
   } catch (error) { notify(errorMessage(error), 'error') } finally { registryTagsLoading.value = false }
 }
 function useRegistryTag() {
-  const suggested = registryImageForm.tag.replace(/^v(?=\d)/, '')
+  const image = selectedRegistryImage.value
+  const suggested = (image?.version || registryImageForm.tag).replace(/^v(?=\d)/, '')
   if (/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/.test(suggested)) registryImageForm.version = suggested
+  const fromImage = image?.gitCommit || commitHint(registryImageForm.tag)
+  registryImageForm.gitCommit = fromImage || registryLatestCommit.value
+  registryCommitSource.value = fromImage ? (image?.gitSource || '从镜像标签自动识别') : (registryLatestCommit.value ? 'Git Ref 最新提交' : '')
+  if (!registryImageForm.gitCommit && !registryCommitLoading.value) refreshRegistryCommit()
+}
+function registryImageLabel(image) {
+  const parts = [image.tag]
+  if (image.createdAt) parts.push(formatDate(image.createdAt))
+  if (image.gitCommit) parts.push(`Git ${short(image.gitCommit, 10)}`)
+  return parts.join(' · ')
 }
 async function createApplicationRegistryExport() {
   try {
@@ -144,10 +205,18 @@ async function createApplicationRegistryExport() {
     await refreshImageExports(); await loadAll(true)
   } catch (error) { notify(errorMessage(error), 'error') }
 }
-function openApplicationForm(role) {
+async function openApplicationForm(role) {
   if (!repositoryFor(selectedProject.value, role)) { notify(`请先绑定${role === 'BACKEND' ? '后端' : '前端'} Git 仓库`, 'error'); return }
   Object.assign(applicationForm, { projectId: selectedProject.value.id, role, version: selectedProject.value.currentVersion || '1.0.0', gitCommit: '', file: null })
+  applicationLatestCommit.value = ''; applicationCommitSource.value = ''
   showApplicationForm.value = true
+  await refreshApplicationCommit()
+}
+function useApplicationFile(file) {
+  applicationForm.file = file || null
+  const fromFile = commitHint(file?.name)
+  applicationForm.gitCommit = fromFile || applicationLatestCommit.value
+  applicationCommitSource.value = fromFile ? '从镜像文件名自动识别' : (applicationLatestCommit.value ? 'Git Ref 最新提交' : '')
 }
 async function importApplicationArtifact() {
   if (!applicationForm.file) { notify('请选择 docker save 生成的 tar', 'error'); return }
@@ -275,7 +344,7 @@ onBeforeUnmount(() => clearInterval(poller))
             <div class="profile-grid">
               <article v-for="role in ['BACKEND','FRONTEND']" :key="role" class="profile-card">
                 <div class="profile-top"><span>{{ role === 'BACKEND' ? 'B' : 'F' }}</span><div><h3>{{ role === 'BACKEND' ? '后端' : '前端' }}</h3><p v-if="repositoryFor(selectedProject, role)" class="mono">{{ repositoryFor(selectedProject, role).url }}</p><p v-else>尚未绑定 Git 仓库</p></div><button @click="openRepositoryForm(role)">{{ repositoryFor(selectedProject, role) ? '编辑 Git' : '绑定 Git' }}</button></div>
-                <div class="image-registry-row" :class="{ emptyRegistry: !imageRegistryFor(selectedProject, role) }"><div><small>Docker 镜像路径</small><b v-if="imageRegistryFor(selectedProject, role)" class="mono">{{ imageRegistryFor(selectedProject, role).registryUrl.replace(/^https?:\/\//,'') }}/{{ imageRegistryFor(selectedProject, role).repository }}</b><b v-else>尚未绑定镜像仓库</b></div><button @click="openImageRegistryForm(role)">{{ imageRegistryFor(selectedProject, role) ? '编辑' : '绑定' }}</button></div>
+                <div class="image-registry-row" :class="{ emptyRegistry: !imageRegistryFor(selectedProject, role) }"><div><small>Docker 镜像路径（自动发现）</small><b v-if="imageRegistryFor(selectedProject, role)" class="mono">{{ imageRegistryFor(selectedProject, role).registryUrl.replace(/^https?:\/\//,'') }}/{{ imageRegistryFor(selectedProject, role).repository }}</b><b v-else>等待从 100.113.245.88:5000 读取</b></div><button :disabled="registryBinding" @click="syncImageRegistries">{{ registryBinding ? '读取中…' : (imageRegistryFor(selectedProject, role) ? '重新读取' : '自动读取') }}</button></div>
                 <div v-if="applicationExportTask(selectedProject.id, role)" class="app-export-state" :class="applicationExportTask(selectedProject.id, role).status.toLowerCase()"><div><b>{{ statusNames[applicationExportTask(selectedProject.id, role).status] }}</b><small>{{ applicationExportTask(selectedProject.id, role).stage }}</small></div><span>{{ applicationExportTask(selectedProject.id, role).progress }}%</span></div>
                 <div class="profile-services"><div v-for="a in projectApplicationArtifacts(selectedProject.id, role).slice(0,4)" :key="a.id"><b>v{{ a.version }} · {{ short(a.gitCommit,10) }}</b><small>{{ a.sourceType === 'REGISTRY_EXPORT' ? short(a.imageReference,34) : formatDate(a.createdAt) }}</small></div><div v-if="!projectApplicationArtifacts(selectedProject.id, role).length"><b>暂无应用镜像</b><small>从仓库选择，或上传 docker save TAR</small></div></div>
                 <footer class="app-image-actions"><span>{{ repositoryFor(selectedProject, role)?.ref || '未设置分支' }}</span><div><button class="text-btn" @click="openRegistryImageForm(role)">从仓库选择</button><button class="text-btn" @click="openApplicationForm(role)">上传 TAR</button></div></footer>
@@ -300,11 +369,9 @@ onBeforeUnmount(() => clearInterval(poller))
 
     <div v-if="showRepositoryForm" class="modal-backdrop" @click.self="showRepositoryForm=false"><form class="modal" @submit.prevent="saveRepository"><div class="modal-head"><div><h2>绑定{{ repositoryForm.role === 'BACKEND' ? '后端' : '前端' }} Git 仓库</h2><p>仓库用于建立镜像与源代码提交之间的追踪关系。</p></div><button type="button" @click="showRepositoryForm=false">×</button></div><div class="form-grid"><label class="full"><span>仓库地址</span><input v-model="repositoryForm.url" required placeholder="https://git.example.com/team/app.git"></label><label><span>默认分支 / Ref</span><input v-model="repositoryForm.ref" required placeholder="main"></label><label><span>认证方式</span><select v-model="repositoryForm.authType"><option value="NONE">无需认证</option><option value="HTTPS">HTTPS Token</option><option value="SSH">SSH 私钥</option></select></label><label v-if="repositoryForm.authType!=='NONE'"><span>用户名</span><input v-model="repositoryForm.username"></label><label v-if="repositoryForm.authType!=='NONE'"><span>{{ repositoryForm.authType==='SSH' ? 'SSH 私钥' : 'Token / 密码' }}</span><input v-model="repositoryForm.secret" type="password" :required="!repositoryForm.id"></label></div><div class="modal-actions"><button type="button" class="ghost" @click="showRepositoryForm=false">取消</button><button class="primary">保存绑定</button></div></form></div>
 
-    <div v-if="showImageRegistryForm" class="modal-backdrop" @click.self="showImageRegistryForm=false"><form class="modal" @submit.prevent="saveImageRegistry"><div class="modal-head"><div><h2>绑定{{ imageRegistryForm.role === 'BACKEND' ? '后端' : '前端' }}镜像仓库</h2><p>填写 Registry 服务地址和该应用镜像在仓库中的路径。</p></div><button type="button" @click="showImageRegistryForm=false">×</button></div><div class="form-grid"><label class="full"><span>Registry 服务地址</span><input v-model="imageRegistryForm.registryUrl" required placeholder="https://harbor.example.com"></label><label class="full"><span>镜像路径</span><input v-model="imageRegistryForm.repository" required placeholder="team/app-backend"><small>例如 Harbor 的“项目名/镜像名”，不要填写标签</small></label><label><span>认证方式</span><select v-model="imageRegistryForm.authType"><option value="NONE">公开仓库 / 无需认证</option><option value="BASIC">用户名 + 密码 / Token</option></select></label><label v-if="imageRegistryForm.authType==='BASIC'"><span>用户名</span><input v-model="imageRegistryForm.username" required></label><label v-if="imageRegistryForm.authType==='BASIC'" class="full"><span>密码或访问令牌</span><input v-model="imageRegistryForm.secret" type="password" :required="!imageRegistryForm.id" :placeholder="imageRegistryForm.id ? '留空表示保持原凭证' : ''"></label></div><div class="modal-actions split-actions"><button v-if="imageRegistryForm.id" type="button" class="danger-link" @click="removeImageRegistry">解除绑定</button><span></span><button type="button" class="ghost" @click="showImageRegistryForm=false">取消</button><button class="primary">保存并读取标签</button></div></form></div>
+    <div v-if="showRegistryImageForm" class="modal-backdrop" @click.self="showRegistryImageForm=false"><form class="modal wide" @submit.prevent="createApplicationRegistryExport"><div class="modal-head"><div><h2>选择{{ registryImageForm.role === 'BACKEND' ? '后端' : '前端' }}应用镜像</h2><p>镜像和元数据直接读取自 {{ registryCatalogRepository || '100.113.245.88:5000' }}，无需手工输入标签。</p></div><button type="button" @click="showRegistryImageForm=false">×</button></div><div class="credential-toolbar"><span v-if="registryTagsLoading">正在读取标签、创建时间与 Git 信息…</span><span v-else>可用镜像 {{ registryImages.length }} 个<span v-if="unavailableRegistryTags.length">；另有 {{ unavailableRegistryTags.length }} 个损坏标签已跳过</span></span></div><div class="form-grid"><label class="full"><span>镜像标签</span><select v-if="registryImages.length" v-model="registryImageForm.tag" required @change="useRegistryTag"><option v-for="image in registryImages" :key="image.tag" :value="image.tag">{{ registryImageLabel(image) }}</option></select><div v-else-if="!registryTagsLoading" class="registry-empty">没有可用镜像；请先确认 Registry 中已经推送完整的目标架构镜像。</div></label><div v-if="selectedRegistryImage" class="registry-image-meta full"><div><small>创建时间</small><b>{{ selectedRegistryImage.createdAt ? formatDate(selectedRegistryImage.createdAt) : '镜像未记录' }}</b></div><div><small>Git Commit</small><b class="mono">{{ selectedRegistryImage.gitCommit || '将读取 Git Ref' }}</b></div><div><small>平台 / 大小</small><b>{{ selectedRegistryImage.architecture }} · {{ formatBytes(selectedRegistryImage.size) }}</b></div><div><small>Digest</small><b class="mono" :title="selectedRegistryImage.digest">{{ short(selectedRegistryImage.digest, 22) }}…</b></div></div><label><span>应用版本</span><input v-model="registryImageForm.version" required pattern="[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?" placeholder="1.2.3"></label><label><span>Git Commit ID（自动）</span><div class="inline-field"><input v-model="registryImageForm.gitCommit" readonly required placeholder="正在读取 Git…"><button type="button" class="text-btn" :disabled="registryCommitLoading" @click="refreshRegistryCommit(true)">{{ registryCommitLoading ? '获取中…' : '读取 Git Ref' }}</button></div><small>{{ registryCommitSource || '优先使用镜像 OCI 信息和 sha-* 标签' }}</small></label><label class="full"><span>目标平台</span><input :value="`${registryImageForm.targetOs} · linux/${registryImageForm.targetArch}`" disabled></label></div><div class="modal-actions"><button type="button" class="ghost" @click="showRegistryImageForm=false">取消</button><button class="primary" :disabled="registryTagsLoading || registryCommitLoading || !selectedRegistryImage || !registryImageForm.gitCommit">拉取并生成离线 TAR</button></div></form></div>
 
-    <div v-if="showRegistryImageForm" class="modal-backdrop" @click.self="showRegistryImageForm=false"><form class="modal" @submit.prevent="createApplicationRegistryExport"><div class="modal-head"><div><h2>选择{{ registryImageForm.role === 'BACKEND' ? '后端' : '前端' }}应用镜像</h2><p>平台将拉取所选标签、校验项目架构并导出为离线 TAR。</p></div><button type="button" @click="showRegistryImageForm=false">×</button></div><div class="credential-toolbar"><span v-if="registryTagsLoading">正在从 Registry 读取标签…</span><span v-else>已读取 {{ registryTags.length }} 个标签；无标签时也可手工填写</span></div><div class="form-grid"><label class="full"><span>镜像标签</span><select v-if="registryTags.length" v-model="registryImageForm.tag" required @change="useRegistryTag"><option v-for="tag in registryTags" :key="tag" :value="tag">{{ tag }}</option></select><input v-else v-model="registryImageForm.tag" required :disabled="registryTagsLoading" placeholder="例如 1.2.3"></label><label><span>应用版本</span><input v-model="registryImageForm.version" required pattern="[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?" placeholder="1.2.3"></label><label><span>Git Commit ID</span><input v-model="registryImageForm.gitCommit" required pattern="[0-9a-fA-F]{7,64}" placeholder="生成该镜像的 commit SHA"></label><label class="full"><span>目标平台</span><input :value="`${registryImageForm.targetOs} · linux/${registryImageForm.targetArch}`" disabled></label></div><div class="modal-actions"><button type="button" class="ghost" @click="showRegistryImageForm=false">取消</button><button class="primary" :disabled="registryTagsLoading">拉取并生成离线 TAR</button></div></form></div>
-
-    <div v-if="showApplicationForm" class="modal-backdrop" @click.self="showApplicationForm=false"><form class="modal" @submit.prevent="importApplicationArtifact"><div class="modal-head"><div><h2>上传{{ applicationForm.role === 'BACKEND' ? '后端' : '前端' }}应用镜像</h2><p>上传外部构建并 docker save 的 TAR，同时绑定生成它的 Git commit。</p></div><button type="button" @click="showApplicationForm=false">×</button></div><div class="form-grid"><label><span>应用版本</span><input v-model="applicationForm.version" required placeholder="1.2.3"></label><label><span>Git Commit ID</span><input v-model="applicationForm.gitCommit" required pattern="[0-9a-fA-F]{7,64}" placeholder="40 位 commit SHA"></label><label class="full"><span>镜像 TAR</span><input type="file" accept=".tar" @change="applicationForm.file=$event.target.files[0]" required></label></div><div class="modal-actions"><button type="button" class="ghost" @click="showApplicationForm=false">取消</button><button class="primary">上传并绑定</button></div></form></div>
+    <div v-if="showApplicationForm" class="modal-backdrop" @click.self="showApplicationForm=false"><form class="modal" @submit.prevent="importApplicationArtifact"><div class="modal-head"><div><h2>上传{{ applicationForm.role === 'BACKEND' ? '后端' : '前端' }}应用镜像</h2><p>Git Commit 会从镜像文件名中的 sha-* 或项目绑定的 Git Ref 自动获取。</p></div><button type="button" @click="showApplicationForm=false">×</button></div><div class="form-grid"><label><span>应用版本</span><input v-model="applicationForm.version" required placeholder="1.2.3"></label><label><span>Git Commit ID（自动）</span><div class="inline-field"><input v-model="applicationForm.gitCommit" readonly required placeholder="正在读取 Git…"><button type="button" class="text-btn" :disabled="applicationCommitLoading" @click="refreshApplicationCommit(true)">{{ applicationCommitLoading ? '获取中…' : '重新获取' }}</button></div><small>{{ applicationCommitSource || '根据镜像文件名或绑定仓库自动获取' }}</small></label><label class="full"><span>镜像 TAR</span><input type="file" accept=".tar" @change="useApplicationFile($event.target.files[0])" required></label></div><div class="modal-actions"><button type="button" class="ghost" @click="showApplicationForm=false">取消</button><button class="primary" :disabled="applicationCommitLoading || !applicationForm.gitCommit">上传并绑定</button></div></form></div>
 
     <div v-if="showSqlForm" class="modal-backdrop" @click.self="showSqlForm=false"><form class="modal" @submit.prevent="importSqlScript"><div class="modal-head"><div><h2>上传数据库脚本</h2><p>初始化 SQL 随 bootstrap 包入 database/init；迁移 SQL 入 database/migrations/目标版本。</p></div><button type="button" @click="showSqlForm=false">×</button></div><div class="form-grid"><label><span>类型</span><select v-model="sqlForm.kind"><option value="INIT">初始化 (INIT)</option><option value="MIGRATION">迁移 (MIGRATION)</option></select></label><label><span>名称</span><input v-model="sqlForm.name" required placeholder="schema-init"></label><label><span>目标版本</span><input v-model="sqlForm.targetVersion" required placeholder="1.1.1"></label><label class="full"><span>SQL 文件</span><input type="file" accept=".sql" @change="sqlForm.file=$event.target.files[0]" required></label></div><div class="modal-actions"><button type="button" class="ghost" @click="showSqlForm=false">取消</button><button class="primary">上传并校验</button></div></form></div>
 

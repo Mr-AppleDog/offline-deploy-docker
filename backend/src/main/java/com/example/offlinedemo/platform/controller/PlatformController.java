@@ -6,6 +6,7 @@ import com.example.offlinedemo.platform.domain.Models;
 import com.example.offlinedemo.platform.service.ArtifactService;
 import com.example.offlinedemo.platform.service.ProfileService;
 import com.example.offlinedemo.platform.service.ProjectService;
+import com.example.offlinedemo.platform.service.RepositoryService;
 import com.example.offlinedemo.platform.service.SqlScriptService;
 import com.example.offlinedemo.platform.store.PlatformStore;
 import org.springframework.http.HttpStatus;
@@ -35,15 +36,17 @@ import java.util.UUID;
 public class PlatformController {
     private final PlatformStore store;
     private final ProjectService projects;
+    private final RepositoryService repositories;
     private final ProfileService profiles;
     private final ArtifactService artifacts;
     private final SqlScriptService sqlScripts;
     private final MiddlewareCatalog catalog;
 
-    public PlatformController(PlatformStore store, ProjectService projects, ProfileService profiles,
+    public PlatformController(PlatformStore store, ProjectService projects, RepositoryService repositories, ProfileService profiles,
                               ArtifactService artifacts, SqlScriptService sqlScripts, MiddlewareCatalog catalog) {
         this.store = store;
         this.projects = projects;
+        this.repositories = repositories;
         this.profiles = profiles;
         this.artifacts = artifacts;
         this.sqlScripts = sqlScripts;
@@ -108,6 +111,14 @@ public class PlatformController {
         projects.deleteRepository(projectId, repositoryId);
     }
 
+    @GetMapping("/projects/{projectId}/repositories/{role}/latest-commit")
+    public Map<String, String> latestRepositoryCommit(@PathVariable String projectId,
+                                                       @PathVariable String role) throws Exception {
+        RepositoryService.ResolvedCommit resolved = repositories.resolveCommit(projectId, role);
+        return Map.of("role", resolved.role(), "repositoryId", resolved.repositoryId(),
+                "repositoryUrl", resolved.repositoryUrl(), "ref", resolved.ref(), "commit", resolved.commit());
+    }
+
     @PostMapping("/projects/{id}/analyze")
     public Models.AnalysisResult analyze(@PathVariable String id) throws Exception { return projects.analyze(id); }
 
@@ -170,10 +181,12 @@ public class PlatformController {
                                                       @RequestPart("file") MultipartFile file,
                                                       @RequestParam String role,
                                                       @RequestParam String version,
-                                                      @RequestParam String gitCommit) throws Exception {
+                                                      @RequestParam(required = false) String gitCommit) throws Exception {
         Path staged = stageUpload(file);
         try {
-            return artifacts.importApplication(projectId, role, version, gitCommit, staged.toString());
+            String resolvedCommit = gitCommit == null || gitCommit.isBlank()
+                    ? repositories.resolveCommit(projectId, role).commit() : gitCommit;
+            return artifacts.importApplication(projectId, role, version, resolvedCommit, staged.toString());
         } finally {
             Files.deleteIfExists(staged);
         }
@@ -237,6 +250,8 @@ public class PlatformController {
         view.put("role", registry.role);
         view.put("registryUrl", registry.registryUrl);
         view.put("repository", registry.repository);
+        view.put("pullAuthority", registry.pullAuthority == null ? "" : registry.pullAuthority);
+        view.put("managed", registry.managed);
         view.put("authType", registry.authType);
         view.put("username", registry.username == null ? "" : registry.username);
         view.put("credentialConfigured", registry.secretCipher != null && !registry.secretCipher.isBlank());

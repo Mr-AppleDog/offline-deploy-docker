@@ -127,6 +127,10 @@ public final class Models {
         public String registryUrl;
         /** Registry V2 中的镜像路径，例如 team/app-backend。 */
         public String repository;
+        /** Docker 守护进程拉取时使用的主机和端口；为空时沿用 registryUrl。 */
+        public String pullAuthority;
+        /** 是否由平台依据项目 appKey 自动发现和维护。 */
+        public boolean managed;
         /** NONE / BASIC。 */
         public String authType;
         public String username;

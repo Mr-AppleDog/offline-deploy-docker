@@ -37,6 +37,11 @@ spec:
               value: /data
             - name: KUNLUN_PROJECT_ROOT
               value: /workspace
+            # 页面从 Tailscale 地址读取 Registry；宿主机 Docker 通过本机端口拉取。
+            - name: KUNLUN_APPLICATION_REGISTRY_URL
+              value: http://100.113.245.88:5000
+            - name: KUNLUN_APPLICATION_REGISTRY_PULL_AUTHORITY
+              value: localhost:5000
             - name: TZ
               value: Asia/Shanghai
           volumeMounts:

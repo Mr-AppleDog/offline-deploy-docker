@@ -13,6 +13,10 @@ public class PlatformProperties {
     private String secretKey = "";
     private int maxAnalysisFiles = 6000;
     private int commandTimeoutMinutes = 60;
+    /** 应用镜像目录使用的 Registry V2 API 根地址。 */
+    private String applicationRegistryUrl = "http://localhost:5000";
+    /** Docker 守护进程实际拉取镜像时使用的 Registry authority。 */
+    private String applicationRegistryPullAuthority = "localhost:5000";
     private MetadataProperties metadata = new MetadataProperties();
     private StorageProperties storage = new StorageProperties();
 
@@ -28,6 +32,10 @@ public class PlatformProperties {
     public void setMaxAnalysisFiles(int maxAnalysisFiles) { this.maxAnalysisFiles = maxAnalysisFiles; }
     public int getCommandTimeoutMinutes() { return commandTimeoutMinutes; }
     public void setCommandTimeoutMinutes(int commandTimeoutMinutes) { this.commandTimeoutMinutes = commandTimeoutMinutes; }
+    public String getApplicationRegistryUrl() { return applicationRegistryUrl; }
+    public void setApplicationRegistryUrl(String applicationRegistryUrl) { this.applicationRegistryUrl = applicationRegistryUrl; }
+    public String getApplicationRegistryPullAuthority() { return applicationRegistryPullAuthority; }
+    public void setApplicationRegistryPullAuthority(String applicationRegistryPullAuthority) { this.applicationRegistryPullAuthority = applicationRegistryPullAuthority; }
     public MetadataProperties getMetadata() { return metadata; }
     public void setMetadata(MetadataProperties metadata) { this.metadata = metadata; }
     public StorageProperties getStorage() { return storage; }

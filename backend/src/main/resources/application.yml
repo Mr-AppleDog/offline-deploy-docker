@@ -48,6 +48,8 @@ kunlun:
     secret-key: ${KUNLUN_SECRET_KEY:}
     max-analysis-files: ${KUNLUN_MAX_ANALYSIS_FILES:6000}
     command-timeout-minutes: ${KUNLUN_COMMAND_TIMEOUT_MINUTES:60}
+    application-registry-url: ${KUNLUN_APPLICATION_REGISTRY_URL:http://localhost:5000}
+    application-registry-pull-authority: ${KUNLUN_APPLICATION_REGISTRY_PULL_AUTHORITY:localhost:5000}
     metadata:
       jdbc-url: ${KUNLUN_METADB_URL:}
       username: ${KUNLUN_METADB_USER:}

@@ -304,9 +304,12 @@ while IFS='|' read -r action repository tag modified; do
 done <"$PLAN_FILE"
 
 gc_log="/var/log/registry-gc-$(date '+%Y%m%d-%H%M%S').log"
-echo "执行 Registry 垃圾回收，完整日志：$gc_log"
+# 不使用 --delete-untagged：OCI 多架构索引引用的子 manifest 本身通常没有标签，
+# 该选项会把仍被保留标签引用的子 manifest 一并删除，造成标签可见但镜像无法拉取。
+# 当前阶段优先保证仓库完整性；旧 revision 会在启用 Registry API 安全删除后再回收。
+echo "执行保守 Registry 垃圾回收（保留 OCI 子 manifest），完整日志：$gc_log"
 docker run --rm --volumes-from "$REGISTRY_CONTAINER" "$registry_image" \
-  garbage-collect --delete-untagged /etc/docker/registry/config.yml >"$gc_log" 2>&1
+  garbage-collect /etc/docker/registry/config.yml >"$gc_log" 2>&1
 grep -E 'blobs marked|eligible for deletion' "$gc_log" | tail -n 3 || true
 
 docker start "$REGISTRY_CONTAINER" >/dev/null

@@ -32,6 +32,11 @@ public class ApplicationRegistryController {
         return store.project(projectId).imageRegistries.stream().map(registries::view).toList();
     }
 
+    @PostMapping("/auto-bind")
+    public List<Map<String, Object>> autoBind(@PathVariable String projectId) {
+        return registries.autoBind(projectId).stream().map(registries::view).toList();
+    }
+
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> create(@PathVariable String projectId,
@@ -54,7 +59,13 @@ public class ApplicationRegistryController {
     @GetMapping("/{registryId}/tags")
     public Map<String, Object> tags(@PathVariable String projectId, @PathVariable String registryId) {
         var registry = registries.config(projectId, registryId);
-        return Map.of("repository", ApplicationRegistryService.imageReference(registry, "{tag}"),
-                "tags", registries.tags(projectId, registryId));
+        var catalog = registries.images(projectId, registryId);
+        Map<String, Object> response = new java.util.LinkedHashMap<>();
+        response.put("repository", registry.registryUrl.replaceFirst("^https?://", "")
+                + "/" + registry.repository + ":{tag}");
+        response.put("tags", catalog.tags());
+        response.put("images", catalog.images());
+        response.put("unavailableTags", catalog.unavailableTags());
+        return response;
     }
 }
