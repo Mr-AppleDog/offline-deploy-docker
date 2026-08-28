@@ -42,12 +42,27 @@ public class PlatformStore {
         if (state.artifacts == null) state.artifacts = new java.util.LinkedHashMap<>();
         if (state.sqlScripts == null) state.sqlScripts = new java.util.LinkedHashMap<>();
         if (state.builds == null) state.builds = new java.util.LinkedHashMap<>();
+        if (state.imageExportTasks == null) state.imageExportTasks = new java.util.LinkedHashMap<>();
         boolean recovered = false;
+        for (Models.Project project : state.projects.values()) {
+            if (project.targetOs == null || project.targetOs.isBlank()) { project.targetOs = Models.DEFAULT_OS; recovered = true; }
+            if (project.targetArch == null || project.targetArch.isBlank()) { project.targetArch = Models.DEFAULT_ARCH; recovered = true; }
+            if (project.repositories == null) { project.repositories = new java.util.ArrayList<>(); recovered = true; }
+        }
         for (Models.BuildTask task : state.builds.values()) {
             if ("QUEUED".equals(task.status) || "RUNNING".equals(task.status)) {
                 task.status = "FAILED";
                 task.stage = "INTERRUPTED";
                 task.error = "平台重启导致构建中断，请重新发起任务。";
+                task.finishedAt = Instant.now();
+                recovered = true;
+            }
+        }
+        for (Models.ImageExportTask task : state.imageExportTasks.values()) {
+            if ("QUEUED".equals(task.status) || "RUNNING".equals(task.status)) {
+                task.status = "FAILED";
+                task.stage = "INTERRUPTED";
+                task.error = "平台重启导致镜像导出中断，请重新发起任务。";
                 task.finishedAt = Instant.now();
                 recovered = true;
             }
@@ -118,6 +133,33 @@ public class PlatformStore {
     public synchronized void putArtifact(Models.Artifact artifact) {
         state.artifacts.put(artifact.id, artifact);
         save();
+    }
+
+    public synchronized List<Models.ImageExportTask> imageExportTasks() {
+        return state.imageExportTasks.values().stream()
+                .sorted(Comparator.comparing((Models.ImageExportTask t) -> t.createdAt).reversed())
+                .toList();
+    }
+
+    public synchronized Models.ImageExportTask imageExportTask(String id) {
+        Models.ImageExportTask value = state.imageExportTasks.get(id);
+        if (value == null) throw new NotFoundException("镜像导出任务不存在：" + id);
+        return value;
+    }
+
+    public synchronized void putImageExportTask(Models.ImageExportTask task) {
+        state.imageExportTasks.put(task.id, task);
+        save();
+    }
+
+    public synchronized void updateImageExportTask(String id, Consumer<Models.ImageExportTask> mutation) {
+        Models.ImageExportTask task = imageExportTask(id);
+        mutation.accept(task);
+        save();
+    }
+
+    public synchronized long countImageExportTasksByStatus(String status) {
+        return state.imageExportTasks.values().stream().filter(t -> status.equals(t.status)).count();
     }
 
     public synchronized List<Models.SqlScript> sqlScripts() {

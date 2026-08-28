@@ -67,6 +67,7 @@ public class BuildWorker {
                 value.startedAt = Instant.now();
             });
             log(taskId, "开始构建 " + task.packageType + "，目标 " + target.description() + "（" + target.ociPlatform() + "）");
+            task.sourceCommits.forEach((role, commit) -> log(taskId, role + " Git Commit：" + commit));
             Models.Project project = store.project(task.projectId);
             ProfileService.ResolvedProfile profile = profiles.resolve(task.profileId);
             if (profile.profile().revision != task.spec.profileRevision)
@@ -346,6 +347,8 @@ public class BuildWorker {
         lines.add("TARGET_OS=" + targetOf(task).os);
         lines.add("TARGET_ARCH=" + targetOf(task).arch);
         lines.add("PROJECT_KEY=" + project.appKey);
+        lines.add("BACKEND_GIT_COMMIT=" + task.sourceCommits.getOrDefault("BACKEND", ""));
+        lines.add("FRONTEND_GIT_COMMIT=" + task.sourceCommits.getOrDefault("FRONTEND", ""));
         lines.add("DEPLOYMENT_PROFILE_ID=" + profile.profile().id);
         lines.add("DEPLOYMENT_PROFILE_REVISION=" + profile.profile().revision);
         java.util.Set<String> includedApps = new java.util.LinkedHashSet<>(ArtifactService.APP_IMAGE_COMPONENTS);

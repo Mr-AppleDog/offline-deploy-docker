@@ -34,6 +34,36 @@ public class ArtifactService {
     }
 
     public Models.Artifact importFile(String component, String version, String sourcePath, String arch) throws Exception {
+        return importFile(component, version, sourcePath, arch, new ImportMetadata());
+    }
+
+    public Models.Artifact importApplication(String projectId, String role, String version,
+                                             String gitCommit, String sourcePath) throws Exception {
+        Models.Project project = store.project(projectId);
+        String normalizedRole = role == null ? "" : role.trim().toUpperCase(Locale.ROOT);
+        if (!List.of("FRONTEND", "BACKEND").contains(normalizedRole))
+            throw new IllegalArgumentException("应用角色只支持 FRONTEND 或 BACKEND");
+        if (gitCommit == null || !gitCommit.matches("^[0-9a-fA-F]{7,64}$"))
+            throw new IllegalArgumentException("Git 提交必须是 7-64 位十六进制 commit id");
+        Models.RepositoryConfig repository = project.repositories.stream()
+                .filter(value -> normalizedRole.equals(value.role)).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("请先为项目绑定 " + normalizedRole + " Git 仓库"));
+        ImportMetadata metadata = new ImportMetadata();
+        metadata.sourceType = "UPLOAD";
+        metadata.projectId = project.id;
+        metadata.projectName = project.name;
+        metadata.applicationRole = normalizedRole;
+        metadata.gitRepositoryId = repository.id;
+        metadata.gitRepositoryUrl = repository.url;
+        metadata.gitRef = repository.ref;
+        metadata.gitCommit = gitCommit.toLowerCase(Locale.ROOT);
+        metadata.imageReference = project.appKey + "-" + normalizedRole.toLowerCase(Locale.ROOT) + ":" + version;
+        return importFile("app-" + normalizedRole.toLowerCase(Locale.ROOT), version, sourcePath,
+                project.targetArch, metadata);
+    }
+
+    public Models.Artifact importFile(String component, String version, String sourcePath, String arch,
+                                      ImportMetadata metadata) throws Exception {
         String normalizedComponent = component == null ? "" : component.toLowerCase(Locale.ROOT);
         if (!INFRA_COMPONENTS.contains(normalizedComponent)
                 && !APP_IMAGE_COMPONENTS.contains(normalizedComponent)
@@ -61,6 +91,18 @@ public class ArtifactService {
         artifact.fileName = safeName;
         artifact.size = Files.size(source);
         artifact.sha256 = FileSupport.sha256(source);
+        ImportMetadata details = metadata == null ? new ImportMetadata() : metadata;
+        artifact.sourceType = blankDefault(details.sourceType, "UPLOAD");
+        artifact.projectId = clean(details.projectId);
+        artifact.projectName = clean(details.projectName);
+        artifact.applicationRole = clean(details.applicationRole);
+        artifact.gitRepositoryId = clean(details.gitRepositoryId);
+        artifact.gitRepositoryUrl = clean(details.gitRepositoryUrl);
+        artifact.gitRef = clean(details.gitRef);
+        artifact.gitCommit = clean(details.gitCommit);
+        artifact.imageReference = clean(details.imageReference);
+        artifact.imageId = clean(details.imageId);
+        artifact.imageDigest = clean(details.imageDigest);
 
         String prefix = artifact.id.substring(0, 8) + "-" + safeName;
         String destination = blobStore.remote()
@@ -74,6 +116,23 @@ public class ArtifactService {
         artifact.createdAt = Instant.now();
         store.putArtifact(artifact);
         return artifact;
+    }
+
+    private String clean(String value) { return value == null || value.isBlank() ? null : value.trim(); }
+    private String blankDefault(String value, String fallback) { return value == null || value.isBlank() ? fallback : value.trim(); }
+
+    public static final class ImportMetadata {
+        public String sourceType;
+        public String projectId;
+        public String projectName;
+        public String applicationRole;
+        public String gitRepositoryId;
+        public String gitRepositoryUrl;
+        public String gitRef;
+        public String gitCommit;
+        public String imageReference;
+        public String imageId;
+        public String imageDigest;
     }
 
     public List<Models.Artifact> selected(List<String> ids) {

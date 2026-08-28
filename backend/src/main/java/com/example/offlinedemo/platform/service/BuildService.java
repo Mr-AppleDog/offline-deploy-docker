@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -28,7 +29,15 @@ public class BuildService {
     public Models.BuildTask create(BuildInput input) {
         Models.Project project = store.project(input.projectId);
         Models.DeploymentProfile profile = store.profile(input.profileId);
-        Models.BuildTarget target = Models.BuildTarget.of(input.targetOs, input.targetArch).normalized();
+        Models.BuildTarget target = Models.BuildTarget.of(project.targetOs, project.targetArch).normalized();
+        if (input.targetOs != null && !input.targetOs.isBlank() && !target.os.equals(input.targetOs))
+            throw new IllegalArgumentException("构建目标系统必须使用项目创建时固定的 " + target.os);
+        if (input.targetArch != null && !input.targetArch.isBlank() && !target.arch.equals(input.targetArch))
+            throw new IllegalArgumentException("构建架构必须使用项目创建时固定的 " + target.arch);
+        Models.BuildTarget profileTarget = Models.BuildTarget.of(profile.targetOs, profile.targetArch).normalized();
+        if (!profileTarget.os.equals(target.os) || !profileTarget.arch.equals(target.arch))
+            throw new IllegalArgumentException("部署配置架构 " + profileTarget.description()
+                    + " 与项目架构 " + target.description() + " 不一致");
         String type = input.packageType == null ? "" : input.packageType.toUpperCase(Locale.ROOT);
         if (!List.of("BOOTSTRAP", "APP_UPDATE").contains(type)) throw new IllegalArgumentException("不支持的包类型");
         requireVersion(input.targetVersion, "目标版本");
@@ -59,6 +68,7 @@ public class BuildService {
 
         List<String> artifactIds = input.artifactIds == null ? List.of() : List.copyOf(input.artifactIds);
         Set<String> components = new LinkedHashSet<>();
+        Map<String, String> sourceCommits = new java.util.LinkedHashMap<>();
         for (String id : artifactIds) {
             Models.Artifact artifact = store.artifact(id);
             if (!target.ociPlatform().equals(artifact.architecture))
@@ -68,6 +78,16 @@ public class BuildService {
                     && !input.targetVersion.equals(artifact.version))
                 throw new IllegalArgumentException("应用镜像制品 " + artifact.component + " 版本 " + artifact.version
                         + " 必须与目标版本 " + input.targetVersion + " 一致（镜像名 <appKey>-<role>:<版本>）");
+            if (ArtifactService.APP_IMAGE_COMPONENTS.contains(artifact.component)) {
+                if (!project.id.equals(artifact.projectId))
+                    throw new IllegalArgumentException("应用镜像制品 " + artifact.component + " 不属于当前项目");
+                String expectedRole = artifact.component.substring("app-".length()).toUpperCase(Locale.ROOT);
+                if (!expectedRole.equals(artifact.applicationRole))
+                    throw new IllegalArgumentException("应用镜像制品角色与组件不一致：" + artifact.component);
+                if (artifact.gitCommit == null || artifact.gitCommit.isBlank())
+                    throw new IllegalArgumentException("应用镜像制品 " + artifact.component + " 未绑定 Git 提交");
+                sourceCommits.put(artifact.applicationRole, artifact.gitCommit);
+            }
             components.add(artifact.component);
         }
         if (components.size() != artifactIds.size()) throw new IllegalArgumentException("同一个组件只能选择一个制品版本");
@@ -75,15 +95,21 @@ public class BuildService {
             Set<String> required = new LinkedHashSet<>();
             required.add("docker-engine");
             required.add("docker-compose");
+            required.add("app-backend");
+            required.add("app-frontend");
             for (Models.MiddlewareCredential mc : profile.middleware) required.add(mc.component);
-            for (String req : required) if (!components.contains(req)) throw new IllegalArgumentException("初始化包必须选择 Docker、Compose 以及部署配置中声明的每个中间件制品（前后端应用镜像可选，不上传则 application/images 为空）");
-            for (String c : components) if (!required.contains(c) && !ArtifactService.APP_IMAGE_COMPONENTS.contains(c)) throw new IllegalArgumentException("初始化包不支持该制品组件：" + c);
+            for (String req : required) if (!components.contains(req))
+                throw new IllegalArgumentException("初始化包必须选择前后端应用镜像、Docker、Compose 以及部署配置中声明的每个中间件制品");
+            for (String c : components) if (!required.contains(c))
+                throw new IllegalArgumentException("初始化包不支持该制品组件：" + c);
         } else {
             for (String role : scope) {
                 String appComponent = "app-" + role.toLowerCase(Locale.ROOT);
                 if (!components.contains(appComponent))
                     throw new IllegalArgumentException("更新范围包含 " + role + "，但未选择对应的 " + appComponent + " 应用镜像制品");
             }
+            for (String component : components) if (!ArtifactService.APP_IMAGE_COMPONENTS.contains(component))
+                throw new IllegalArgumentException("应用更新包只能选择前后端应用镜像制品");
         }
 
         Models.BuildSpec spec = new Models.BuildSpec();
@@ -114,6 +140,7 @@ public class BuildService {
         task.status = "QUEUED";
         task.stage = "等待构建 Worker";
         task.progress = 0;
+        task.sourceCommits.putAll(sourceCommits);
         task.spec = spec;
         task.createdAt = Instant.now();
         store.putBuild(task);

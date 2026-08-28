@@ -82,6 +82,7 @@ public final class Models {
         public Map<String, Artifact> artifacts = new LinkedHashMap<>();
         public Map<String, SqlScript> sqlScripts = new LinkedHashMap<>();
         public Map<String, BuildTask> builds = new LinkedHashMap<>();
+        public Map<String, ImageExportTask> imageExportTasks = new LinkedHashMap<>();
     }
 
     public static final class Project {
@@ -90,6 +91,9 @@ public final class Models {
         public String appKey;
         public String description;
         public String currentVersion;
+        /** 项目创建时固化的离线交付目标。 */
+        public String targetOs = DEFAULT_OS;
+        public String targetArch = DEFAULT_ARCH;
         public String backendHealthPath;
         public String frontendHealthPath;
         public List<RepositoryConfig> repositories = new ArrayList<>();
@@ -160,7 +164,43 @@ public final class Models {
         public String storeType = "local";
         public String sha256;
         public long size;
+        /** UPLOAD / REGISTRY_EXPORT。 */
+        public String sourceType = "UPLOAD";
+        /** 应用镜像所属项目；中间件和基础设施制品为空。 */
+        public String projectId;
+        public String projectName;
+        /** FRONTEND / BACKEND，仅应用镜像使用。 */
+        public String applicationRole;
+        public String gitRepositoryId;
+        public String gitRepositoryUrl;
+        public String gitRef;
+        public String gitCommit;
+        /** docker pull/save 制品的原始镜像引用及校验后的镜像 ID。 */
+        public String imageReference;
+        public String imageId;
+        public String imageDigest;
         public Instant createdAt;
+    }
+
+    /** 从镜像仓库拉取指定平台镜像并导出 docker-save tar 的异步任务。 */
+    public static final class ImageExportTask {
+        public String id;
+        public String component;
+        public String version;
+        public String imageReference;
+        public String targetOs;
+        public String targetArch;
+        public String status;
+        public String stage;
+        public int progress;
+        public String artifactId;
+        public boolean reused;
+        public String imageId;
+        public String imageDigest;
+        public String error;
+        public Instant createdAt;
+        public Instant startedAt;
+        public Instant finishedAt;
     }
 
     /** 数据库脚本制品：通过页面上传入库，构建时按 id 引用拷进交付包。 */

@@ -29,11 +29,13 @@ public class ProjectService {
     }
 
     public Models.Project save(String id, String name, String appKey, String description, String currentVersion,
+                               String targetOs, String targetArch,
                                String backendHealthPath, String frontendHealthPath) {
         require(name, "项目名称");
         if (appKey == null || !appKey.matches("^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$"))
             throw new IllegalArgumentException("应用标识只能使用 3-50 位小写字母、数字和连字符");
         Instant now = Instant.now();
+        Models.BuildTarget target = Models.BuildTarget.of(targetOs, targetArch).normalized();
         Models.Project project;
         if (id == null) {
             project = new Models.Project();
@@ -41,16 +43,31 @@ public class ProjectService {
             project.createdAt = now;
         } else {
             project = store.project(id);
+            Models.BuildTarget original = Models.BuildTarget.of(project.targetOs, project.targetArch).normalized();
+            if (!original.os.equals(target.os) || !original.arch.equals(target.arch))
+                throw new IllegalArgumentException("项目目标架构创建后不可修改，请新建项目后重新绑定制品");
+            if (project.appKey != null && !project.appKey.equals(appKey))
+                throw new IllegalArgumentException("项目应用标识创建后不可修改，它已经用于约定镜像名称");
         }
         project.name = name.trim();
         project.appKey = appKey;
         project.description = clean(description);
         project.currentVersion = clean(currentVersion);
+        project.targetOs = target.os;
+        project.targetArch = target.arch;
         project.backendHealthPath = healthPath(backendHealthPath, "/api/health/live", "后端健康路径");
         project.frontendHealthPath = healthPath(frontendHealthPath, "/", "前端健康路径");
         project.updatedAt = now;
         store.putProject(project);
         return project;
+    }
+
+    public void delete(String projectId) {
+        boolean hasArtifacts = store.artifacts().stream().anyMatch(value -> projectId.equals(value.projectId));
+        boolean hasBuilds = store.builds().stream().anyMatch(value -> projectId.equals(value.projectId));
+        if (hasArtifacts || hasBuilds)
+            throw new IllegalArgumentException("项目已有制品或构建历史，为保证追溯记录不能删除");
+        store.deleteProject(projectId);
     }
 
     public Models.RepositoryConfig saveRepository(String projectId, String repositoryId, String role,

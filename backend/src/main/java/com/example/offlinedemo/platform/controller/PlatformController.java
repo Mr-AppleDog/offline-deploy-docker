@@ -59,6 +59,8 @@ public class PlatformController {
                 "sqlScripts", store.sqlScripts().size(),
                 "builds", store.builds().size(),
                 "runningBuilds", store.countBuildsByStatus("RUNNING") + store.countBuildsByStatus("QUEUED"),
+                "imageExportTasks", store.imageExportTasks().size(),
+                "runningImageExports", store.countImageExportTasksByStatus("RUNNING") + store.countImageExportTasksByStatus("QUEUED"),
                 "architecture", Models.ARCHITECTURE,
                 "targets", Models.supportedTargetViews());
     }
@@ -73,18 +75,18 @@ public class PlatformController {
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> createProject(@RequestBody ProjectInput input) {
         return projectView(projects.save(null, input.name, input.appKey, input.description, input.currentVersion,
-                input.backendHealthPath, input.frontendHealthPath));
+                input.targetOs, input.targetArch, input.backendHealthPath, input.frontendHealthPath));
     }
 
     @PutMapping("/projects/{id}")
     public Map<String, Object> updateProject(@PathVariable String id, @RequestBody ProjectInput input) {
         return projectView(projects.save(id, input.name, input.appKey, input.description, input.currentVersion,
-                input.backendHealthPath, input.frontendHealthPath));
+                input.targetOs, input.targetArch, input.backendHealthPath, input.frontendHealthPath));
     }
 
     @DeleteMapping("/projects/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void deleteProject(@PathVariable String id) { store.deleteProject(id); }
+    public void deleteProject(@PathVariable String id) { projects.delete(id); }
 
     @PostMapping("/projects/{projectId}/repositories")
     @ResponseStatus(HttpStatus.CREATED)
@@ -152,9 +154,26 @@ public class PlatformController {
                                            @RequestParam String component,
                                            @RequestParam String version,
                                            @RequestParam(defaultValue = "amd64") String arch) throws Exception {
+        if (ArtifactService.APP_IMAGE_COMPONENTS.contains(component == null ? "" : component.toLowerCase()))
+            throw new IllegalArgumentException("应用镜像必须从项目页面上传并绑定 Git 提交");
         Path staged = stageUpload(file);
         try {
             return artifacts.importFile(component, version, staged.toString(), arch);
+        } finally {
+            Files.deleteIfExists(staged);
+        }
+    }
+
+    @PostMapping("/projects/{projectId}/application-artifacts/import")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Models.Artifact importApplicationArtifact(@PathVariable String projectId,
+                                                      @RequestPart("file") MultipartFile file,
+                                                      @RequestParam String role,
+                                                      @RequestParam String version,
+                                                      @RequestParam String gitCommit) throws Exception {
+        Path staged = stageUpload(file);
+        try {
+            return artifacts.importApplication(projectId, role, version, gitCommit, staged.toString());
         } finally {
             Files.deleteIfExists(staged);
         }
@@ -200,6 +219,8 @@ public class PlatformController {
         view.put("appKey", project.appKey);
         view.put("description", project.description);
         view.put("currentVersion", project.currentVersion);
+        view.put("targetOs", project.targetOs);
+        view.put("targetArch", project.targetArch);
         view.put("backendHealthPath", project.backendHealthPath);
         view.put("frontendHealthPath", project.frontendHealthPath);
         view.put("repositories", project.repositories.stream().map(this::repositoryView).toList());
@@ -279,6 +300,7 @@ public class PlatformController {
 
     public static final class ProjectInput {
         public String name; public String appKey; public String description; public String currentVersion;
+        public String targetOs; public String targetArch;
         public String backendHealthPath; public String frontendHealthPath;
     }
     public static final class RepositoryInput {

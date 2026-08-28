@@ -43,7 +43,9 @@ public class JdbcMetadataStore implements MetadataStore {
                 case "project" -> state.projects.put(row.id(), objectMapper.readValue(row.body(), Models.Project.class));
                 case "profile" -> state.profiles.put(row.id(), objectMapper.readValue(row.body(), Models.DeploymentProfile.class));
                 case "artifact" -> state.artifacts.put(row.id(), objectMapper.readValue(row.body(), Models.Artifact.class));
+                case "sql-script" -> state.sqlScripts.put(row.id(), objectMapper.readValue(row.body(), Models.SqlScript.class));
                 case "build" -> state.builds.put(row.id(), objectMapper.readValue(row.body(), Models.BuildTask.class));
+                case "image-export" -> state.imageExportTasks.put(row.id(), objectMapper.readValue(row.body(), Models.ImageExportTask.class));
                 default -> { /* 忽略未知类型 */ }
             }
         }
@@ -55,7 +57,9 @@ public class JdbcMetadataStore implements MetadataStore {
         write("project", state.projects);
         write("profile", state.profiles);
         write("artifact", state.artifacts);
+        write("sql-script", state.sqlScripts);
         write("build", state.builds);
+        write("image-export", state.imageExportTasks);
     }
 
     private void write(String kind, Map<String, ?> map) throws Exception {
@@ -87,7 +91,9 @@ public class JdbcMetadataStore implements MetadataStore {
         if (value instanceof Models.Project p) return p.name;
         if (value instanceof Models.DeploymentProfile p) return p.name;
         if (value instanceof Models.Artifact a) return a.fileName;
+        if (value instanceof Models.SqlScript s) return s.name;
         if (value instanceof Models.BuildTask b) return b.projectName;
+        if (value instanceof Models.ImageExportTask t) return t.imageReference;
         return null;
     }
 

@@ -2,16 +2,17 @@
 
 ## Web 离线交付平台
 
-当前项目已经从固定示例打包脚本扩展为可视化离线交付平台。平台运行在可访问代码仓库和 Docker Engine 的受控构建机上（前后端应用镜像由用户在平台外构建并导入 tar，平台不再从源码构建），生成供无外网 Kylin V10 `amd64`/`arm64`（飞腾/鲲鹏）服务器使用的离线包。
+当前项目已经从固定示例打包脚本扩展为可视化离线交付平台。平台运行在可访问镜像仓库、Git 与 Docker Engine 的受控 Linux 构建机上。前后端镜像由用户在平台外构建并上传，平台负责把它们与 Git 提交绑定；中间件镜像可由平台按架构拉取并导出 TAR，最终生成供无外网 Kylin V10 `amd64`/`arm64`（飞腾/鲲鹏）服务器使用的离线包。
 
 主要能力：
 
-- 项目登记 appKey、当前版本与健康路径，用于镜像命名与 Compose 门禁；**无需配置代码仓库、无需仓库分析**；
-- **页面上传驱动**：前后端镜像 tar 与数据库 SQL 通过页面上传入库，自动计算 SHA256，构建时下拉选择、可复用；
+- **项目是首要入口**：创建时固定 `amd64`（x86）或 `arm64`（ARM），并绑定一个前端 Git 仓库和一个后端 Git 仓库；
+- **应用镜像可追溯**：前后端镜像 TAR 从项目页上传，必须绑定项目、角色、版本和 Git commit；
+- **中间件 TAR 制作**：在独立页面选择 MySQL/PostgreSQL/Redis 等组件、版本和架构，平台执行 `docker pull --platform`、架构校验与 `docker save`；
 - **数据库脚本库**：初始化 SQL（随 bootstrap 包入 `database/init`）与迁移 SQL（入 `database/migrations/<版本>`）分类入库，构建时按目标版本选择入包；
 - **中间件注册表**：内置 MySQL、PostgreSQL、人大金仓 KingbaseES、达梦 DM8、瀚高 HighGo、MongoDB、Redis、RabbitMQ、Kafka、RocketMQ、Elasticsearch、MinIO、Nginx、东方通 TongWeb 等 14 类，新增中间件只需加一条目录定义，不写死代码；
 - **双架构目标**：Kylin V10 `amd64` 与 `arm64`，产物命名 `-kylin-v10-<arch>`，贯穿镜像 tar 导入、Compose 平台与安装脚本校验；
-- 上传 Docker、Compose、各类中间件镜像 tar 与前后端应用镜像 tar（按架构分区）；
+- 上传 Docker、Compose 等基础介质；中间件 TAR 可上传也可由平台制作（按架构分区）；
 - 按站点配置各中间件独立账号密码，使用 AES-GCM 加密持久化，页面和 API 不回显密文；
 - 异步串行构建，输出实时任务阶段、日志、manifest、镜像清单和 SHA256；
 - 生成完整初始化包或前端/后端应用更新包；数据库迁移默认随应用更新包交付；
@@ -44,7 +45,7 @@ docker compose -f compose.platform.yml up -d --build
 
 ### 平台持久化（真实 MySQL + MinIO）
 
-平台自身元数据（项目/配置/制品/构建记录）默认落在本地 `.kunlun-builder/platform-state.json`，构建产物落本地 `deliveries/`。要「对接真实数据库和 MinIO」，设置以下环境变量后重启平台：
+平台自身元数据（项目、Git 绑定、制品、镜像制作任务、配置、构建记录）默认落在本地 `.kunlun-builder/platform-state.json`，制品与构建产物落本地文件。要「对接真实数据库和 MinIO」，设置以下环境变量后重启平台：
 
 | 变量 | 含义 | 示例 |
 |---|---|---|
@@ -57,11 +58,14 @@ docker compose -f compose.platform.yml up -d --build
 
 ### 推荐使用顺序
 
-1. 在“项目”创建项目，填写 appKey、版本与健康路径（无需配仓库、无需分析）。
-2. 在“部署配置”创建站点配置，勾选中间件，使用页面为五类密码生成独立强密码。
-3. 在“离线制品库”上传 Docker Engine、Compose、所需中间件 tar，以及前后端应用镜像 tar（在平台外 build 后 `docker tag <appKey>-backend:<版本>` 再 `docker save`）；在“数据库脚本库”上传初始化 / 迁移 SQL。
-4. 在“构建与交付”选择初始化包或应用更新包并提交任务。
-5. 构建成功后下载 `.tar.gz`，同时保存页面显示的 SHA256。
+1. 在“项目”创建项目并固定 x86/ARM 架构，再分别绑定前端、后端 Git 仓库。
+2. 在外部构建应用镜像并 `docker save`，回到项目页上传前后端 TAR，同时填写对应 Git commit。
+3. 在“部署配置”创建与项目同架构的站点配置并勾选中间件；若制品库缺少目标版本，到“中间件制作”页生成 TAR。
+4. 在“离线制品库”上传 Docker Engine、Compose 等基础介质；在“数据库脚本库”上传初始化 / 迁移 SQL。
+5. 从项目页进入构建，逐项选择应用、基础设施和中间件制品版本并提交任务。
+6. 构建成功后下载 `.tar.gz`，同时保存页面显示的 SHA256。
+
+中间件制作与交付构建共用串行 Worker，避免同时操作 Docker 导致资源争抢。制作完成后只清理工作区中的临时 TAR，**不会执行 `docker image rm`、`docker builder prune` 或 Maven 缓存清理**；磁盘不足时请使用 `scripts/cleanup-ci-cache.sh` 手动清理。
 
 应用更新包不会修改中间件账号密码。修改部署配置密码属于凭据轮换，必须通过独立运维流程同步修改已经运行的中间件。
 
