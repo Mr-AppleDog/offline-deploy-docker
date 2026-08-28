@@ -85,14 +85,15 @@ jobs:
           docker push $BACKEND_IMAGE:${{ steps.tag.outputs.sha }}
           docker push $FRONTEND_IMAGE:${{ steps.tag.outputs.sha }}
 
-      - name: 清理本次 Docker 构建副本与缓存
+      - name: 清理本次镜像副本(保留 Maven 镜像与构建缓存)
         if: ${{ always() && steps.registry.outputs.exists != 'true' }}
         run: |
+          # 已推送的 commit 镜像由本地 registry 保存；只删除 runner 上的同名副本。
+          # Maven 基础镜像和 BuildKit 构建缓存不自动清理，磁盘不足时由运维手动执行
+          # scripts/cleanup-ci-cache.sh。
           docker image rm \
             $BACKEND_IMAGE:${{ steps.tag.outputs.sha }} \
-            $FRONTEND_IMAGE:${{ steps.tag.outputs.sha }} \
-            maven:3.9-eclipse-temurin-17 || true
-          docker builder prune -f || true
+            $FRONTEND_IMAGE:${{ steps.tag.outputs.sha }} || true
 
       - name: 更新 GitOps 镜像标签
         env:

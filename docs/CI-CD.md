@@ -20,7 +20,8 @@
  → 后端单元测试门槛(docker run mvn test,以 runner 用户运行)
  → 构建后端镜像(docker buildx,maven 多阶段 → jre-alpine + docker CLI)
  → 构建前端镜像(node:20 → nginx:1.28)
- → 推送 localhost:5000(kunlun-backend / kunlun-frontend)
+ → 推送 localhost:5000(offline-delivery-backend / offline-delivery-frontend)
+ → 删除 runner 上的本次镜像副本，保留 Maven 镜像与全部构建缓存
  → kustomize 改 newTag(两条 images 条目)
  → kubectl kustomize 渲染校验(grep 两个镜像 sha)
  → kubectl apply -k 直推 + rollout status(绕开 Argo fetch 不稳)
@@ -59,7 +60,7 @@
 ## 六、踩坑记录(均已修复)
 
 1. **github.com HTTPS 在本节点被墙**——git/checkout 报 `Recv failure: 连接被对方重置`,SSH(22/443)畅通。解决:仓库挂 ed25519 读写部署密钥,CI 用 `GIT_SSH_COMMAND` 统一走 SSH。**切勿**用全局 `git config url.insteadOf` 把 https→ssh,会连带污染同属 mrlu 用户的 DocLoom runner 并因权限失败。
-2. **节点 40G 根盘偏小**——CI 构建缓存反复把 `/` 推到 95%,触发 k3s `node.kubernetes.io/disk-pressure:NoSchedule` 污点,pod 全 Pending。`docker system prune -af`(勿带 `--volumes`)回收 ~11G;污点等约 5 分钟自动消除,或 `kubectl taint nodes <node> node.kubernetes.io/disk-pressure:NoSchedule-` 手动摘。
+2. **节点 40G 根盘偏小**——CI 构建缓存曾把 `/` 推到 95%,触发 k3s `node.kubernetes.io/disk-pressure:NoSchedule` 污点,pod 全 Pending。workflow 现在保留 Maven 基础镜像与 Docker 构建缓存，不再自动 prune；磁盘不足时由运维运行 `scripts/cleanup-ci-cache.sh` 手动清理。污点约 5 分钟后自动消除，或用 `kubectl taint nodes <node> node.kubernetes.io/disk-pressure:NoSchedule-` 手动摘除。
 3. **mvn test root 属主污染**——测试容器以 root 跑会把 `backend/target/**` 落成 root 属主,下次 checkout clean 权限不够。已改为 `--user $(id -u):$(id -g)`,m2 缓存用 `/home/mrlu/.m2-kunlun`。
 4. **apk/npm 国内源**——`dl-cdn.alpinelinux.org` 单请求 8s 超时、`mirrors.aliyun.com` 0.35s:backend 已换 aliyun alpine 源,frontend 已换 npmmirror。
 5. **SSH 克隆残留**——上一轮未提交的 kustomize 改动会让 `git clone .` 报目录非空,已改为每次克隆前清空工作目录。
@@ -82,12 +83,18 @@ kubectl -n kunlun logs deploy/kunlun-backend --tail=50
 # 冒烟
 curl -s http://192.168.149.128:30088/api/health/live
 
-# 磁盘告急时(重要,见踩坑 2)
-docker system prune -af
+# 查看构建机磁盘与 Docker 占用（默认不清理）
+bash scripts/cleanup-ci-cache.sh status
+
+# 手动清理 7 天前未使用的构建缓存
+bash scripts/cleanup-ci-cache.sh prune-old 168h
+
+# 磁盘严重不足时，显式确认后清理全部未使用的构建缓存
+bash scripts/cleanup-ci-cache.sh prune-all --yes
 ```
 
 ## 八、后续待办(可选加固)
 
 - **backend 构建慢**:maven 仍用默认中央仓库(无 aliyun 镜像),冷启动约 16 分钟,可仿 DocLoom 加 `maven-settings.xml`。
-- **磁盘清理自动化**:在 workflow 里加定期 `docker builder prune`,或加 cron,避免磁盘压力反复出现。
+- **缓存策略监控**:CI 不自动清理 Maven 基础镜像与 Docker 构建缓存；需要定期查看磁盘，并在空间不足时手动执行 `scripts/cleanup-ci-cache.sh`。
 - **docs 烘焙的副作用**:backend Dockerfile 把 `docs/` COPY 进镜像,任何文档改动都会触发后端镜像重建(文档本身在 k3s 下并不被使用)。可考虑只烘焙打包必需的 `deploy/` 与 README,把 docs 移出镜像。
