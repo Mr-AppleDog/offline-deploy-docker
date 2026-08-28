@@ -39,7 +39,25 @@ jobs:
         id: tag
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: 检查本地 registry 是否已有当前提交镜像
+        id: registry
+        env:
+          TAG: ${{ steps.tag.outputs.sha }}
+        run: |
+          accept='application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json'
+          if curl -fsS -o /dev/null -H "Accept: $accept" \
+              "http://localhost:5000/v2/offline-delivery-backend/manifests/$TAG" \
+            && curl -fsS -o /dev/null -H "Accept: $accept" \
+              "http://localhost:5000/v2/offline-delivery-frontend/manifests/$TAG"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "registry 已有 $TAG，复用已验证镜像"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "registry 中无完整 $TAG，进入测试和构建"
+          fi
+
       - name: 后端单元测试(门槛)
+        if: steps.registry.outputs.exists != 'true'
         run: |
           # 以 runner 用户运行,避免 mvn 编译产物 backend/target/** 落盘为 root 属主,
           # 否则下一次 checkout clean 会因权限不够失败。
@@ -54,15 +72,27 @@ jobs:
             mvn -B -q -Dmaven.repo.local=/tmp/.m2/repository test
 
       - name: 构建后端镜像
+        if: steps.registry.outputs.exists != 'true'
         run: docker build -f backend/Dockerfile -t $BACKEND_IMAGE:${{ steps.tag.outputs.sha }} .
 
       - name: 构建前端镜像
+        if: steps.registry.outputs.exists != 'true'
         run: docker build -f frontend/Dockerfile -t $FRONTEND_IMAGE:${{ steps.tag.outputs.sha }} frontend
 
       - name: 推送到本地 registry
+        if: steps.registry.outputs.exists != 'true'
         run: |
           docker push $BACKEND_IMAGE:${{ steps.tag.outputs.sha }}
           docker push $FRONTEND_IMAGE:${{ steps.tag.outputs.sha }}
+
+      - name: 清理本次 Docker 构建副本与缓存
+        if: ${{ always() && steps.registry.outputs.exists != 'true' }}
+        run: |
+          docker image rm \
+            $BACKEND_IMAGE:${{ steps.tag.outputs.sha }} \
+            $FRONTEND_IMAGE:${{ steps.tag.outputs.sha }} \
+            maven:3.9-eclipse-temurin-17 || true
+          docker builder prune -f || true
 
       - name: 更新 GitOps 镜像标签
         env:
