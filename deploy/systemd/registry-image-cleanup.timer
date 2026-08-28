@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodically enforce local Registry image retention
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=10min
+AccuracySec=1min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=registry-image-cleanup.service
+
+[Install]
+WantedBy=timers.target

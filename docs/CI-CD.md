@@ -91,6 +91,19 @@ bash scripts/cleanup-ci-cache.sh prune-old 168h
 
 # 磁盘严重不足时，显式确认后清理全部未使用的构建缓存
 bash scripts/cleanup-ci-cache.sh prune-all --yes
+
+# 预览本地 Registry 前后端镜像保留计划（默认每仓库保留 2 个）
+sudo /usr/local/sbin/cleanup-registry-images.sh
+
+# 手动立即执行保留策略；定时器每 10 分钟会自动执行同一命令
+sudo /usr/local/sbin/cleanup-registry-images.sh --apply
+
+# 一次性清空指定仓库（仍会拒绝删除 K3s 正在使用的标签）
+sudo /usr/local/sbin/cleanup-registry-images.sh --apply --purge-repo kunlun-backend
+
+# 查看自动清理的下次执行时间与日志
+systemctl status registry-image-cleanup.timer
+journalctl -u registry-image-cleanup.service -n 100 --no-pager
 ```
 
 ## 八、后续待办(可选加固)

@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep at most two application images per local Registry repository
+Wants=docker.service k3s.service
+After=docker.service k3s.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cleanup-registry-images.sh --apply
+TimeoutStartSec=30min
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
