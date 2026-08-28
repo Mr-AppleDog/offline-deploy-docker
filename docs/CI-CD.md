@@ -2,22 +2,14 @@
 
 > 本平台自身的构建/测试/部署已接入 k3s GitOps 流水线,复刻 DocLoom 的成熟模式,于 2026-08-23 跑通全绿。本文记录访问方式、架构、运维操作与踩坑,供后续维护查阅。
 
-## 一、访问与令牌
+## 一、访问方式
 
 | 项 | 值 |
 |---|---|
 | 平台访问地址 | `http://192.168.149.128:30088/` |
 | 目标架构 | `linux/amd64`(平台只生产 Kylin x86_64 离线包) |
-| 管理令牌 | k8s Secret `kunlun-admin-token`(见「读取令牌」) |
 
-读取令牌(在 k3s 节点执行,`KUBECONFIG=/home/mrlu/.kube/config`):
-
-```bash
-kubectl -n kunlun get secret kunlun-admin-token \
-  -o jsonpath='{.data.KUNLUN_ADMIN_TOKEN}' | base64 -d
-```
-
-令牌同时备份在构建机 `/home/mrlu/.kunlun-admin-token`(0600)。**不要把明文令牌写进仓库**(仓库是公开的)。
+平台无需登录即可直接访问，页面及 `/api/platform/*` 接口不做身份鉴权。后端拥有宿主机级 Docker 权限，必须只在受控内网开放，严禁直接暴露公网。
 
 ## 二、流水线总览
 
@@ -63,7 +55,6 @@ kubectl -n kunlun get secret kunlun-admin-token \
 
 1. **runner**:`192.168.149.128` 上为 `Mr-AppleDog/offline-deploy-docker` 注册 after self-hosted runner(名 `mrlu-VMware-Virtual-Platform-kunlun`,systemd 常驻)。
 2. **SSH 部署密钥**:节点 `~/.ssh/kunlun_deploy`(ed25519,读写部署密钥挂在仓库上)。原因见「踩坑 1」。
-3. **令牌 Secret**:`kubectl -n kunlun create secret generic kunlun-admin-token --from-literal=KUNLUN_ADMIN_TOKEN=...`(不进 git)。
 
 ## 六、踩坑记录(均已修复)
 

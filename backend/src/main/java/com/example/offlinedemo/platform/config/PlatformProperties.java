@@ -11,7 +11,6 @@ public class PlatformProperties {
     private String dataDir = "../.kunlun-builder";
     private String projectRoot = "..";
     private String secretKey = "";
-    private String adminToken = "";
     private int maxAnalysisFiles = 6000;
     private int commandTimeoutMinutes = 60;
     private MetadataProperties metadata = new MetadataProperties();
@@ -25,8 +24,6 @@ public class PlatformProperties {
     public Path projectRootPath() { return Path.of(projectRoot); }
     public String getSecretKey() { return secretKey; }
     public void setSecretKey(String secretKey) { this.secretKey = secretKey; }
-    public String getAdminToken() { return adminToken; }
-    public void setAdminToken(String adminToken) { this.adminToken = adminToken; }
     public int getMaxAnalysisFiles() { return maxAnalysisFiles; }
     public void setMaxAnalysisFiles(int maxAnalysisFiles) { this.maxAnalysisFiles = maxAnalysisFiles; }
     public int getCommandTimeoutMinutes() { return commandTimeoutMinutes; }

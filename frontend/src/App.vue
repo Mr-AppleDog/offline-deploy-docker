@@ -3,23 +3,6 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import axios from 'axios'
 
 const api = axios.create({ baseURL: '/api/platform', timeout: 120000 })
-api.interceptors.request.use(config => {
-  const token = localStorage.getItem('kunlun-admin-token')
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
-})
-api.interceptors.response.use(response => response, async error => {
-  if (error.response?.status === 401 && !error.config?._tokenRetried) {
-    const token = prompt('请输入离线交付平台管理令牌')
-    if (token) {
-      localStorage.setItem('kunlun-admin-token', token)
-      error.config._tokenRetried = true
-      error.config.headers.Authorization = `Bearer ${token}`
-      return api.request(error.config)
-    }
-  }
-  return Promise.reject(error)
-})
 const nav = [
   { key: 'dashboard', label: '总览', icon: '⌂' },
   { key: 'projects', label: '项目', icon: '⌘' },

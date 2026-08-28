@@ -46,7 +46,6 @@ kunlun:
     data-dir: ${KUNLUN_PLATFORM_DATA_DIR:../.kunlun-builder}
     project-root: ${KUNLUN_PROJECT_ROOT:..}
     secret-key: ${KUNLUN_SECRET_KEY:}
-    admin-token: ${KUNLUN_ADMIN_TOKEN:}
     max-analysis-files: ${KUNLUN_MAX_ANALYSIS_FILES:6000}
     command-timeout-minutes: ${KUNLUN_COMMAND_TIMEOUT_MINUTES:60}
     metadata:

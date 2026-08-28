@@ -22,7 +22,6 @@
 后端要求 JDK 17、Maven、tar、Docker Engine。前端要求 Node.js 20+。项目不需要也禁止使用 Anaconda。
 
 ```powershell
-$env:KUNLUN_ADMIN_TOKEN='请设置足够长的管理令牌'
 cd backend
 mvn spring-boot:run
 ```
@@ -38,11 +37,10 @@ npm run dev
 ### 容器启动
 
 ```powershell
-$env:KUNLUN_ADMIN_TOKEN='请设置足够长的管理令牌'
 docker compose -f compose.platform.yml up -d --build
 ```
 
-访问 `http://localhost:8088`。平台后端为了执行镜像 load/inspect 与 compose config 校验会挂载 Docker Socket，这等同于主机级权限，只能部署在受控构建机，不能直接暴露到公网。镜像 tar 与数据库 SQL 通过 HTTP multipart 上传入库，无需挂载介质目录；若构建机磁盘有限，可把数据目录挂载为卷。
+访问 `http://localhost:8088`，无需登录或输入令牌。平台接口当前不做身份鉴权；同时后端为了执行镜像 load/inspect 与 compose config 校验会挂载 Docker Socket，这等同于主机级权限，因此只能部署在受控内网构建机，严禁直接暴露到公网。镜像 tar 与数据库 SQL 通过 HTTP multipart 上传入库，无需挂载介质目录；若构建机磁盘有限，可把数据目录挂载为卷。
 
 ### 平台持久化（真实 MySQL + MinIO）
 

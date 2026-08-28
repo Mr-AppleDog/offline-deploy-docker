@@ -40,11 +40,6 @@ spec:
               value: /workspace
             - name: TZ
               value: Asia/Shanghai
-            - name: KUNLUN_ADMIN_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: offline-delivery-admin-token
-                  key: KUNLUN_ADMIN_TOKEN
           volumeMounts:
             - name: docker-sock
               mountPath: /var/run/docker.sock
