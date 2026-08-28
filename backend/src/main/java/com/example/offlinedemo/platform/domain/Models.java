@@ -97,6 +97,8 @@ public final class Models {
         public String backendHealthPath;
         public String frontendHealthPath;
         public List<RepositoryConfig> repositories = new ArrayList<>();
+        /** 前端、后端各自绑定的 Docker Registry 镜像路径。 */
+        public List<ImageRegistryConfig> imageRegistries = new ArrayList<>();
         public AnalysisResult analysis;
         public Instant createdAt;
         public Instant updatedAt;
@@ -113,6 +115,22 @@ public final class Models {
         public String username;
         public String secretCipher;
         public String lockedCommit;
+        public Instant updatedAt;
+    }
+
+    /** 项目应用镜像仓库。凭证仅保存 AES-GCM 密文，对外视图不得返回 secretCipher。 */
+    public static final class ImageRegistryConfig {
+        public String id;
+        /** FRONTEND / BACKEND。 */
+        public String role;
+        /** Registry 服务根地址，例如 https://harbor.example.com。 */
+        public String registryUrl;
+        /** Registry V2 中的镜像路径，例如 team/app-backend。 */
+        public String repository;
+        /** NONE / BASIC。 */
+        public String authType;
+        public String username;
+        public String secretCipher;
         public Instant updatedAt;
     }
 
@@ -175,6 +193,8 @@ public final class Models {
         public String gitRepositoryUrl;
         public String gitRef;
         public String gitCommit;
+        /** 通过 Registry 导出时使用的项目镜像仓库配置。 */
+        public String imageRegistryId;
         /** docker pull/save 制品的原始镜像引用及校验后的镜像 ID。 */
         public String imageReference;
         public String imageId;
@@ -188,6 +208,15 @@ public final class Models {
         public String component;
         public String version;
         public String imageReference;
+        /** 应用镜像任务所属项目与角色；中间件任务为空。 */
+        public String projectId;
+        public String projectName;
+        public String applicationRole;
+        public String gitRepositoryId;
+        public String gitRepositoryUrl;
+        public String gitRef;
+        public String gitCommit;
+        public String imageRegistryId;
         public String targetOs;
         public String targetArch;
         public String status;

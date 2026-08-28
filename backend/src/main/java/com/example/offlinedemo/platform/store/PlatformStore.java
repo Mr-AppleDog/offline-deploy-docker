@@ -48,6 +48,7 @@ public class PlatformStore {
             if (project.targetOs == null || project.targetOs.isBlank()) { project.targetOs = Models.DEFAULT_OS; recovered = true; }
             if (project.targetArch == null || project.targetArch.isBlank()) { project.targetArch = Models.DEFAULT_ARCH; recovered = true; }
             if (project.repositories == null) { project.repositories = new java.util.ArrayList<>(); recovered = true; }
+            if (project.imageRegistries == null) { project.imageRegistries = new java.util.ArrayList<>(); recovered = true; }
         }
         for (Models.BuildTask task : state.builds.values()) {
             if ("QUEUED".equals(task.status) || "RUNNING".equals(task.status)) {

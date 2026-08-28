@@ -2,12 +2,13 @@
 
 ## Web 离线交付平台
 
-当前项目已经从固定示例打包脚本扩展为可视化离线交付平台。平台运行在可访问镜像仓库、Git 与 Docker Engine 的受控 Linux 构建机上。前后端镜像由用户在平台外构建并上传，平台负责把它们与 Git 提交绑定；中间件镜像可由平台按架构拉取并导出 TAR，最终生成供无外网 Kylin V10 `amd64`/`arm64`（飞腾/鲲鹏）服务器使用的离线包。
+当前项目已经从固定示例打包脚本扩展为可视化离线交付平台。平台运行在可访问镜像仓库、Git 与 Docker Engine 的受控 Linux 构建机上。前后端镜像由用户在平台外构建，可以从项目绑定的 Docker Registry 选择标签并导出，也可以上传现成 TAR；两种方式都会与 Git 提交绑定。中间件镜像也可由平台按架构拉取并导出 TAR，最终生成供无外网 Kylin V10 `amd64`/`arm64`（飞腾/鲲鹏）服务器使用的离线包。
 
 主要能力：
 
 - **项目是首要入口**：创建时固定 `amd64`（x86）或 `arm64`（ARM），并绑定一个前端 Git 仓库和一个后端 Git 仓库；
-- **应用镜像可追溯**：前后端镜像 TAR 从项目页上传，必须绑定项目、角色、版本和 Git commit；
+- **应用镜像仓库**：前端、后端分别绑定 Registry 服务地址和镜像路径，浏览标签后直接选择；支持公开仓库和用户名 + 密码/Token 私有仓库；
+- **应用镜像可追溯**：Registry 导出或手工上传的前后端 TAR 都必须绑定项目、角色、版本和 Git commit；
 - **中间件 TAR 制作**：在独立页面选择 MySQL/PostgreSQL/Redis 等组件、版本和架构，平台执行 `docker pull --platform`、架构校验与 `docker save`；
 - **数据库脚本库**：初始化 SQL（随 bootstrap 包入 `database/init`）与迁移 SQL（入 `database/migrations/<版本>`）分类入库，构建时按目标版本选择入包；
 - **中间件注册表**：内置 MySQL、PostgreSQL、人大金仓 KingbaseES、达梦 DM8、瀚高 HighGo、MongoDB、Redis、RabbitMQ、Kafka、RocketMQ、Elasticsearch、MinIO、Nginx、东方通 TongWeb 等 14 类，新增中间件只需加一条目录定义，不写死代码；
@@ -59,7 +60,7 @@ docker compose -f compose.platform.yml up -d --build
 ### 推荐使用顺序
 
 1. 在“项目”创建项目并固定 x86/ARM 架构，再分别绑定前端、后端 Git 仓库。
-2. 在外部构建应用镜像并 `docker save`，回到项目页上传前后端 TAR，同时填写对应 Git commit。
+2. 为前端、后端绑定 Docker Registry 地址与镜像路径，从标签列表选择镜像并填写对应 Git commit；已有 `docker save` TAR 仍可直接上传。
 3. 在“部署配置”创建与项目同架构的站点配置并勾选中间件；若制品库缺少目标版本，到“中间件制作”页生成 TAR。
 4. 在“离线制品库”上传 Docker Engine、Compose 等基础介质；在“数据库脚本库”上传初始化 / 迁移 SQL。
 5. 从项目页进入构建，逐项选择应用、基础设施和中间件制品版本并提交任务。

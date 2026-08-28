@@ -25,11 +25,23 @@ public class CommandRunner {
 
     public Result run(List<String> command, Path workingDirectory, Map<String, String> environment,
                       Consumer<String> output) throws IOException, InterruptedException {
+        return run(command, workingDirectory, environment, output, null);
+    }
+
+    /**
+     * 执行命令并把敏感输入写入标准输入。输入不会出现在命令行、日志或异常展示中，
+     * 适合 docker login --password-stdin 等场景。
+     */
+    public Result run(List<String> command, Path workingDirectory, Map<String, String> environment,
+                      Consumer<String> output, String standardInput) throws IOException, InterruptedException {
         ProcessBuilder builder = new ProcessBuilder(command);
         if (workingDirectory != null) builder.directory(workingDirectory.toFile());
         if (environment != null) builder.environment().putAll(environment);
         builder.redirectErrorStream(true);
         Process process = builder.start();
+        try (var stdin = process.getOutputStream()) {
+            if (standardInput != null) stdin.write(standardInput.getBytes(StandardCharsets.UTF_8));
+        }
         List<String> lines = new ArrayList<>();
         Thread reader = new Thread(() -> {
             try (BufferedReader buffered = new BufferedReader(

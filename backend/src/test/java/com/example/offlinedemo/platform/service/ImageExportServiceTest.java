@@ -59,6 +59,52 @@ class ImageExportServiceTest {
                 .hasMessageContaining("不支持 arm64");
     }
 
+    @Test
+    void createsProjectApplicationImageExportFromBoundRegistry() {
+        Models.Project project = new Models.Project();
+        project.id = "project-1";
+        project.name = "订单系统";
+        project.targetOs = "kylin-v10";
+        project.targetArch = "arm64";
+        Models.RepositoryConfig source = new Models.RepositoryConfig();
+        source.id = "git-1";
+        source.role = "BACKEND";
+        source.url = "https://git.example.com/team/backend.git";
+        source.ref = "main";
+        project.repositories.add(source);
+        Models.ImageRegistryConfig registry = new Models.ImageRegistryConfig();
+        registry.id = "registry-1";
+        registry.role = "BACKEND";
+        registry.registryUrl = "https://harbor.example.com";
+        registry.repository = "team/order-backend";
+        registry.authType = "NONE";
+        project.imageRegistries.add(registry);
+        when(store.project("project-1")).thenReturn(project);
+        when(store.artifacts()).thenReturn(List.of());
+        when(store.imageExportTasks()).thenReturn(List.of());
+
+        ImageExportService.ImageExportInput input = new ImageExportService.ImageExportInput();
+        input.projectId = "project-1";
+        input.applicationRole = "BACKEND";
+        input.registryId = "registry-1";
+        input.tag = "v1.2.3";
+        input.version = "1.2.3";
+        input.gitCommit = "abcdef1234567";
+        input.targetArch = "arm64";
+
+        Models.ImageExportTask task = service.create(input);
+
+        assertThat(task.component).isEqualTo("app-backend");
+        assertThat(task.imageReference).isEqualTo("harbor.example.com/team/order-backend:v1.2.3");
+        assertThat(task.projectId).isEqualTo("project-1");
+        assertThat(task.applicationRole).isEqualTo("BACKEND");
+        assertThat(task.gitCommit).isEqualTo("abcdef1234567");
+        assertThat(task.targetArch).isEqualTo("arm64");
+        assertThat(task.status).isEqualTo("QUEUED");
+        verify(store).putImageExportTask(task);
+        verify(executor).execute(org.mockito.ArgumentMatchers.any());
+    }
+
     private CatalogEntry entry(String component, String imageRepo, List<String> architectures) {
         CatalogEntry value = new CatalogEntry();
         value.component = component;

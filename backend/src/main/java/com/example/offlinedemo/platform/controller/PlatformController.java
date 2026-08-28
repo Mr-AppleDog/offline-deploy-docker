@@ -224,9 +224,23 @@ public class PlatformController {
         view.put("backendHealthPath", project.backendHealthPath);
         view.put("frontendHealthPath", project.frontendHealthPath);
         view.put("repositories", project.repositories.stream().map(this::repositoryView).toList());
+        view.put("imageRegistries", project.imageRegistries.stream().map(this::imageRegistryView).toList());
         view.put("analysis", project.analysis);
         view.put("createdAt", project.createdAt);
         view.put("updatedAt", project.updatedAt);
+        return view;
+    }
+
+    private Map<String, Object> imageRegistryView(Models.ImageRegistryConfig registry) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("id", registry.id);
+        view.put("role", registry.role);
+        view.put("registryUrl", registry.registryUrl);
+        view.put("repository", registry.repository);
+        view.put("authType", registry.authType);
+        view.put("username", registry.username == null ? "" : registry.username);
+        view.put("credentialConfigured", registry.secretCipher != null && !registry.secretCipher.isBlank());
+        view.put("updatedAt", registry.updatedAt);
         return view;
     }
 
