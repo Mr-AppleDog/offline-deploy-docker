@@ -4,8 +4,112 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+usage() {
+  printf '用法：bash %s [--root /绝对/安装目录]\n' "${BASH_SOURCE[0]}"
+}
+
+KUNLUN_ROOT="${KUNLUN_ROOT:-/opt/Kunlun}"
+while (( $# > 0 )); do
+  case "$1" in
+    --root)
+      (( $# >= 2 )) || { printf '错误：--root 缺少目录参数。\n' >&2; usage >&2; exit 2; }
+      KUNLUN_ROOT="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      printf '错误：未知参数：%s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+while [[ "$KUNLUN_ROOT" != / && "$KUNLUN_ROOT" == */ ]]; do
+  KUNLUN_ROOT="${KUNLUN_ROOT%/}"
+done
+export KUNLUN_ROOT
+
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
+
+umask 077
+require_root
+validate_kunlun_root
+require_command install
+require_command tee
+[[ ! -L "$KUNLUN_ROOT" ]] || die "$KUNLUN_ROOT 不能是符号链接。"
+start_persistent_log deploy install-bootstrap
+
+readonly INSTALL_STARTED_AT="$(date --iso-8601=seconds)"
+INSTALL_PHASE=安装预检
+INSTALL_FAILED_COMMAND=unknown
+INSTALL_FAILED_LINE=unknown
+INSTALL_COMPLETED=false
+
+collect_install_diagnostics() {
+  (
+    set +Eeuo pipefail
+    printf '%s\n' '=== 安装失败诊断：系统 ==='
+    uname -a
+    df -hT "$KUNLUN_ROOT"
+    df -i "$KUNLUN_ROOT"
+    du -sh "$KUNLUN_ROOT" 2>/dev/null
+    command -v free >/dev/null 2>&1 && free -h
+
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+      printf '%s\n' '=== 安装失败诊断：Docker ==='
+      docker info --format 'Server={{.ServerVersion}} Root={{.DockerRootDir}} OS={{.OSType}} Arch={{.Architecture}}'
+      docker system df
+      docker ps -a --no-trunc --filter "label=com.docker.compose.project=$MIDDLEWARE_PROJECT"
+      docker ps -a --no-trunc --filter "label=com.docker.compose.project=$APP_PROJECT"
+
+      for project in "$MIDDLEWARE_PROJECT" "$APP_PROJECT"; do
+        while IFS= read -r container_id; do
+          [[ -n "$container_id" ]] || continue
+          container_name="$(docker inspect --format '{{.Name}}' "$container_id" | sed 's#^/##')"
+          printf '=== 容器状态：%s ===\n' "$container_name"
+          docker inspect --format \
+            'status={{.State.Status}} running={{.State.Running}} restart={{.RestartCount}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}} oom={{.State.OOMKilled}} exit={{.State.ExitCode}} error={{.State.Error}}' \
+            "$container_id"
+          printf '%s\n' '--- 最近健康检查 ---'
+          docker inspect --format \
+            '{{range .State.Health.Log}}{{println .End "exit=" .ExitCode}}{{println .Output}}{{end}}' \
+            "$container_id"
+          printf '%s\n' '--- 最近容器日志（最多 200 行） ---'
+          docker logs --timestamps --tail 200 "$container_id"
+        done < <(docker ps -aq --filter "label=com.docker.compose.project=$project")
+      done
+    fi
+
+    if command -v journalctl >/dev/null 2>&1; then
+      printf '%s\n' '=== Docker 服务日志（本次安装期间，最多 300 行） ==='
+      journalctl -u docker --since "$INSTALL_STARTED_AT" -n 300 --no-pager
+    fi
+  )
+}
+
+finish_install() {
+  local exit_code=$?
+  trap - EXIT ERR
+  if (( exit_code != 0 )); then
+    log "bootstrap 安装失败：阶段=$INSTALL_PHASE，行=${INSTALL_FAILED_LINE}，命令=${INSTALL_FAILED_COMMAND}，退出码=$exit_code。"
+    collect_install_diagnostics || true
+  elif [[ "$INSTALL_COMPLETED" != true ]]; then
+    log 'bootstrap 安装未完成，但脚本未返回错误；请检查调用链。'
+    exit_code=1
+  fi
+  log "完整安装日志：$KUNLUN_LOG_FILE"
+  exit "$exit_code"
+}
+
+trap 'INSTALL_FAILED_COMMAND=$BASH_COMMAND; INSTALL_FAILED_LINE=$LINENO' ERR
+trap finish_install EXIT
+
+log "开始 bootstrap 安装：包目录=$PACKAGE_ROOT，安装根目录=$KUNLUN_ROOT。"
 
 readonly MANIFEST="$PACKAGE_ROOT/manifest.env"
 [[ -f "$MANIFEST" ]] || die '离线包缺少 manifest.env。'
@@ -46,12 +150,13 @@ case "$TARGET_ARCH|$REQUIRED_PLATFORM" in
     ;;
 esac
 
-require_root
 require_command sha256sum
 require_command tar
 require_command systemctl
 require_command ss
 require_command flock
+require_command du
+require_command df
 
 [[ "$(uname -m)" == "$REQUIRED_UNAME_ARCH" ]] || die "目标机架构必须为 $REQUIRED_UNAME_ARCH。"
 [[ "$(ps -p 1 -o comm=)" == systemd ]] || die '目标机必须使用 systemd。'
@@ -80,6 +185,7 @@ grep -qx 'PACKAGE_TYPE=bootstrap' "$MANIFEST" || die '离线包类型不是 boot
 grep -qx 'CREDENTIAL_MODE=embedded-compose' "$MANIFEST" || die '凭据模式不是 embedded-compose。'
 
 log '校验包内 SHA256。'
+INSTALL_PHASE=校验离线包
 (
   cd "$PACKAGE_ROOT"
   sha256sum -c SHA256SUMS
@@ -88,10 +194,20 @@ log '校验包内 SHA256。'
 conflicts="$(ss -H -lntp | grep -E ':(80|15672|9001)[[:space:]]' || true)"
 [[ -z "$conflicts" ]] || die "部署端口已被占用：$conflicts"
 
-available_kb="$(df -Pk /opt | awk 'NR==2 {print $4}')"
-[[ "$available_kb" =~ ^[0-9]+$ ]] || die '无法读取 /opt 可用空间。'
-(( available_kb >= 5 * 1024 * 1024 )) || die '/opt 可用空间少于 5 GiB。'
+package_kb="$(du -sk "$PACKAGE_ROOT" | awk '{print $1}')"
+available_kb="$(df -Pk "$KUNLUN_ROOT" | awk 'NR==2 {print $4}')"
+[[ "$package_kb" =~ ^[0-9]+$ ]] || die '无法计算离线包体积。'
+[[ "$available_kb" =~ ^[0-9]+$ ]] || die "无法读取 $KUNLUN_ROOT 所在文件系统的可用空间。"
+required_kb=$(( package_kb * 3 + 2 * 1024 * 1024 ))
+minimum_kb=$(( 10 * 1024 * 1024 ))
+(( required_kb >= minimum_kb )) || required_kb=$minimum_kb
+available_gib="$(awk -v value="$available_kb" 'BEGIN { printf "%.2f", value / 1024 / 1024 }')"
+required_gib="$(awk -v value="$required_kb" 'BEGIN { printf "%.2f", value / 1024 / 1024 }')"
+log "空间预检：可用 ${available_gib} GiB，最低需要 ${required_gib} GiB。"
+(( available_kb >= required_kb )) || \
+  die "$KUNLUN_ROOT 所在文件系统空间不足：可用 ${available_gib} GiB，需要至少 ${required_gib} GiB。"
 
+INSTALL_PHASE=初始化目录
 bash "$SCRIPT_DIR/init-layout.sh"
 ensure_lock_dir
 exec 9>"$LOCK_DIR/install-bootstrap.lock"
@@ -104,12 +220,13 @@ for component in "${MIDDLEWARE_COMPONENTS[@]}"; do
   fi
 done
 
-install -m 0600 \
+INSTALL_PHASE=安装运行文件
+materialize_root_template \
   "$PACKAGE_ROOT/middleware/compose.middleware.yml" \
-  "$MIDDLEWARE_COMPOSE"
-install -m 0600 \
+  "$MIDDLEWARE_COMPOSE" 0600
+materialize_root_template \
   "$PACKAGE_ROOT/application/compose.app.yml" \
-  "$APP_COMPOSE"
+  "$APP_COMPOSE" 0600
 install -m 0750 "$PACKAGE_ROOT"/scripts/*.sh "$KUNLUN_ROOT/scripts/"
 
 install -d -m 0700 "$KUNLUN_ROOT/application/images/$APP_VERSION"
@@ -141,7 +258,9 @@ install -m 0700 \
 install -m 0600 \
   "$PACKAGE_ROOT/docker/install/$COMPOSE_BINARY.sha256" \
   "$KUNLUN_ROOT/docker/install/$COMPOSE_BINARY.sha256"
-install -m 0600 "$PACKAGE_ROOT/docker/install/daemon.json" "$KUNLUN_ROOT/docker/install/daemon.json"
+materialize_root_template \
+  "$PACKAGE_ROOT/docker/install/daemon.json" \
+  "$KUNLUN_ROOT/docker/install/daemon.json" 0600
 install -m 0600 "$PACKAGE_ROOT/docker/install/docker.service" "$KUNLUN_ROOT/docker/install/docker.service"
 
 (
@@ -215,6 +334,7 @@ install_docker() {
   verify_docker_runtime
 }
 
+INSTALL_PHASE=安装并校验Docker
 install_docker
 
 validate_runtime_files
@@ -222,6 +342,7 @@ compose_middleware config --quiet
 compose_app config --quiet
 
 log '校验并导入镜像。'
+INSTALL_PHASE=导入镜像
 record_count=0
 while IFS='|' read -r image expected_id expected_platform tar_relative expected_tar_hash; do
   [[ -n "$image" && -n "$expected_id" && -n "$expected_platform" && -n "$tar_relative" && -n "$expected_tar_hash" ]] || \
@@ -249,13 +370,20 @@ if find "$KUNLUN_ROOT/database/init" -maxdepth 1 -type f -name '*.sql' -print -q
   chmod 0644 "$KUNLUN_ROOT"/middleware/mysql/init/*.sql
 fi
 
+INSTALL_PHASE=初始化数据目录权限
 bash "$KUNLUN_ROOT/scripts/init-dirs.sh"
 
 if ! docker network inspect "$KUNLUN_NETWORK" >/dev/null 2>&1; then
   docker network create --driver bridge --label com.kunlun.managed=true "$KUNLUN_NETWORK" >/dev/null
 fi
 
+INSTALL_PHASE=启动并验收服务
+export KUNLUN_BOOTSTRAP_MODE=true
 bash "$KUNLUN_ROOT/scripts/start.sh"
+unset KUNLUN_BOOTSTRAP_MODE
+set_project_restart_policy "$MIDDLEWARE_PROJECT" unless-stopped
+set_project_restart_policy "$APP_PROJECT" unless-stopped
 bash "$KUNLUN_ROOT/scripts/status.sh"
 
+INSTALL_COMPLETED=true
 log "Kunlun $APP_VERSION bootstrap 初始化、启动和健康验收全部完成。"

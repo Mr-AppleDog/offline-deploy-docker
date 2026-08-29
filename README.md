@@ -90,8 +90,12 @@ docker compose -f compose.platform.yml up -d --build
 
 ## 最终运行模型
 
+安装根目录可由 `install-bootstrap.sh --root <绝对路径>` 指定，默认值为
+`/opt/Kunlun`。下文以 `<KUNLUN_ROOT>` 表示实际选择的目录；Docker data-root、
+Compose 数据挂载、运维脚本和日志都会使用同一个根目录。
+
 ```text
-/opt/Kunlun
+<KUNLUN_ROOT>
 ├── docker/          # Docker 离线安装介质和 data-root
 ├── middleware/      # 固定的四个中间件、镜像 tar 和持久化数据
 ├── application/     # 当前应用 Compose 和分版本应用镜像 tar
@@ -104,19 +108,34 @@ docker compose -f compose.platform.yml up -d --build
 
 实际运行只有两个 Compose 项目：
 
-- `/opt/Kunlun/middleware/compose.middleware.yml`：MySQL、Redis、RabbitMQ、MinIO。
-- `/opt/Kunlun/application/compose.app.yml`：backend、frontend。
+- `<KUNLUN_ROOT>/middleware/compose.middleware.yml`：选中的中间件。
+- `<KUNLUN_ROOT>/application/compose.app.yml`：backend、frontend。
 
 两套 Compose 使用外部网络 `kunlun-net`。backend 通过 Docker DNS 访问 `mysql:3306`、`redis:6379`、`rabbitmq:5672` 和 `minio:9000`。
 
 ## 配置约定
 
-- 不再使用 `/opt/Kunlun/config/kunlun.env`。
+- 不再使用 `<KUNLUN_ROOT>/config/kunlun.env`。
 - 镜像、路径、端口、库名、账号和密码直接写入对应 Compose。
 - 中间件初始化凭据写在 `compose.middleware.yml`。
 - backend 必须取得相同连接凭据，因此 `compose.app.yml` 保存同一套凭据副本。
 - 两份 Compose 都是站点专用敏感文件，权限必须为 `root:root 0600`。
 - 包含两份 Compose 的离线 tar 同样属于敏感材料，不能进入公共仓库或跨站点复用。
+
+首次安装示例：
+
+```bash
+bash scripts/install-bootstrap.sh --root /data/Kunlun
+```
+
+安装过程的标准输出、错误输出和失败诊断自动写入：
+
+```text
+<KUNLUN_ROOT>/logs/deploy/install-bootstrap-<时间>-<PID>.log
+```
+
+日志权限为 `0600`。首次健康验收期间容器自动重启会暂时关闭，以保留第一个
+失败现场；全部服务健康后再恢复 `unless-stopped` 生产重启策略。
 
 ## 版本策略
 

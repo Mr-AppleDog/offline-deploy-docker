@@ -4,10 +4,40 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+usage() {
+  printf '用法：bash %s [--root /绝对/安装目录]\n' "${BASH_SOURCE[0]}"
+}
+
+KUNLUN_ROOT="${KUNLUN_ROOT:-/opt/Kunlun}"
+while (( $# > 0 )); do
+  case "$1" in
+    --root)
+      (( $# >= 2 )) || { printf '错误：--root 缺少目录参数。\n' >&2; usage >&2; exit 2; }
+      KUNLUN_ROOT="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      printf '错误：未知参数：%s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+while [[ "$KUNLUN_ROOT" != / && "$KUNLUN_ROOT" == */ ]]; do
+  KUNLUN_ROOT="${KUNLUN_ROOT%/}"
+done
+export KUNLUN_ROOT
+
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
 require_root
+validate_kunlun_root
 require_command sha256sum
 require_command flock
 require_command docker
@@ -32,7 +62,7 @@ readonly TO_VERSION="$(manifest_value TO_VERSION)"
 readonly PROJECT_KEY="$(manifest_value PROJECT_KEY)"
 readonly UPDATE_SCOPE="$(manifest_value UPDATE_SCOPE)"
 readonly DB_MIGRATION_REQUIRED="$(manifest_value DB_MIGRATION_REQUIRED)"
-readonly NEW_APP_COMPOSE="$PACKAGE_ROOT/application/compose.app.yml"
+readonly NEW_APP_COMPOSE_TEMPLATE="$PACKAGE_ROOT/application/compose.app.yml"
 
 log '校验更新包 SHA256。'
 (
@@ -45,6 +75,19 @@ require_docker
 ensure_lock_dir
 exec 9>"$LOCK_DIR/install-app-update.lock"
 flock -n 9 || die '另一个应用更新任务正在执行。'
+
+NEW_APP_COMPOSE="$(mktemp "$KUNLUN_ROOT/tmp/compose-app-update.XXXXXX.yml")"
+cleanup_new_compose() {
+  local exit_code=$?
+  trap - EXIT
+  if [[ -n "${NEW_APP_COMPOSE:-}" && -f "$NEW_APP_COMPOSE" && \
+        "$NEW_APP_COMPOSE" == "$KUNLUN_ROOT/tmp/compose-app-update."*.yml ]]; then
+    rm -f -- "$NEW_APP_COMPOSE"
+  fi
+  exit "$exit_code"
+}
+trap cleanup_new_compose EXIT
+materialize_root_template "$NEW_APP_COMPOSE_TEMPLATE" "$NEW_APP_COMPOSE" 0600
 
 bash "$KUNLUN_ROOT/scripts/check-middleware.sh"
 compose_app up -d --wait --wait-timeout 180

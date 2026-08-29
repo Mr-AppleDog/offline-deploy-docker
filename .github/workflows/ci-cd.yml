@@ -39,6 +39,9 @@ jobs:
         id: tag
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: 离线部署脚本测试
+        run: bash scripts/test-deploy-scripts.sh
+
       - name: 检查本地 registry 是否已有当前提交镜像
         id: registry
         env:

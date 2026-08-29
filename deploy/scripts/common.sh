@@ -2,13 +2,36 @@
 
 set -Eeuo pipefail
 
-readonly KUNLUN_ROOT=/opt/Kunlun
+readonly DEFAULT_KUNLUN_ROOT=/opt/Kunlun
+
+# 安装入口会显式导出 KUNLUN_ROOT；安装完成后的运维脚本则从自身所在的
+# <root>/scripts 目录反推出根目录，保证自定义安装目录无需每次重复传参。
+if [[ -z "${KUNLUN_ROOT:-}" ]]; then
+  inferred_root=""
+  if [[ -n "${SCRIPT_DIR:-}" ]]; then
+    inferred_root="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+  fi
+  if [[ -n "$inferred_root" && -f "$inferred_root/middleware.list" && \
+        -f "$inferred_root/middleware/compose.middleware.yml" && \
+        -f "$inferred_root/application/compose.app.yml" ]]; then
+    KUNLUN_ROOT="$inferred_root"
+  else
+    KUNLUN_ROOT="$DEFAULT_KUNLUN_ROOT"
+  fi
+  unset inferred_root
+fi
+export KUNLUN_ROOT
+readonly KUNLUN_ROOT
 readonly MIDDLEWARE_COMPOSE="$KUNLUN_ROOT/middleware/compose.middleware.yml"
 readonly APP_COMPOSE="$KUNLUN_ROOT/application/compose.app.yml"
 readonly MIDDLEWARE_PROJECT=kunlun-middleware
 readonly APP_PROJECT=kunlun-app
 readonly KUNLUN_NETWORK=kunlun-net
 readonly LOCK_DIR="$KUNLUN_ROOT/tmp/locks"
+
+# Compose 的动态终端动画不适合持久日志；统一输出可检索的纯文本进度。
+export COMPOSE_ANSI="${COMPOSE_ANSI:-never}"
+export COMPOSE_PROGRESS="${COMPOSE_PROGRESS:-plain}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S%z')" "$*"
@@ -18,6 +41,18 @@ die() {
   printf '错误：%s\n' "$*" >&2
   exit 1
 }
+
+validate_kunlun_root() {
+  [[ "$KUNLUN_ROOT" == /* ]] || die "安装根目录必须是绝对路径：$KUNLUN_ROOT"
+  [[ "$KUNLUN_ROOT" != / ]] || die '安装根目录不能是 /。'
+  [[ "$KUNLUN_ROOT" != *//* ]] || die "安装根目录不能包含重复斜杠：$KUNLUN_ROOT"
+  [[ ! "$KUNLUN_ROOT" =~ (^|/)\.\.?(/|$) ]] || \
+    die "安装根目录不能包含 . 或 .. 路径段：$KUNLUN_ROOT"
+  [[ "$KUNLUN_ROOT" =~ ^/[[:alnum:]_.@+/-]+$ ]] || \
+    die '安装根目录只能包含字母、数字、/、_、-、.、@、+。'
+}
+
+validate_kunlun_root
 
 require_root() {
   [[ ${EUID:-$(id -u)} -eq 0 ]] || die '请使用 root 执行。'
@@ -97,6 +132,47 @@ ensure_image_identity() {
 
 ensure_lock_dir() {
   install -d -m 0700 "$LOCK_DIR"
+}
+
+start_persistent_log() {
+  local category="$1" prefix="$2" log_dir timestamp
+  [[ "$category" =~ ^[a-z0-9-]+$ && "$prefix" =~ ^[a-z0-9-]+$ ]] || \
+    die '日志分类或前缀格式错误。'
+  require_command tee
+  log_dir="$KUNLUN_ROOT/logs/$category"
+  install -d -m 0750 "$log_dir"
+  timestamp="$(date '+%Y%m%dT%H%M%S%z')"
+  KUNLUN_LOG_FILE="$log_dir/${prefix}-${timestamp}-$$.log"
+  : >"$KUNLUN_LOG_FILE"
+  chmod 0600 "$KUNLUN_LOG_FILE"
+  export KUNLUN_LOG_FILE
+  exec > >(tee -a -- "$KUNLUN_LOG_FILE") 2>&1
+}
+
+# 离线包内的 Compose 和 daemon.json 以 /opt/Kunlun 为可校验的默认模板；
+# 安装时只替换这个固定根路径，再以目标权限原子落盘。
+materialize_root_template() {
+  local source="$1" target="$2" mode="${3:-0600}" temp line
+  [[ -f "$source" ]] || die "模板文件不存在：$source"
+  install -d -m 0700 "$KUNLUN_ROOT/tmp"
+  temp="$(mktemp "$KUNLUN_ROOT/tmp/materialize.XXXXXX")"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    printf '%s\n' "${line//"$DEFAULT_KUNLUN_ROOT"/"$KUNLUN_ROOT"}"
+  done <"$source" >"$temp"
+  install -m "$mode" "$temp" "$target"
+  rm -f -- "$temp"
+}
+
+set_project_restart_policy() {
+  local project="$1" policy="$2"
+  local -a container_ids=()
+  readarray -t container_ids < <(
+    docker ps -aq --filter "label=com.docker.compose.project=$project"
+  )
+  if (( ${#container_ids[@]} > 0 )); then
+    docker update --restart "$policy" "${container_ids[@]}" >/dev/null
+    log "$project 容器重启策略已设置为 $policy。"
+  fi
 }
 
 compose_middleware() {
