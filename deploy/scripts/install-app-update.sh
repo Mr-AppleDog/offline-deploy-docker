@@ -90,8 +90,7 @@ while IFS='|' read -r image expected_id expected_platform tar_relative expected_
   [[ -f "$tar_path" ]] || die "缺少镜像 tar：$tar_relative"
   [[ "$(sha256sum "$tar_path" | awk '{print $1}')" == "$expected_tar_hash" ]] || die "镜像校验失败：$image"
   docker load -i "$tar_path"
-  actual="$(docker image inspect --format '{{.Id}}|{{.Os}}/{{.Architecture}}' "$image")"
-  [[ "$actual" == "$expected_id|$expected_platform" ]] || die "导入镜像身份不一致：$image"
+  ensure_image_identity "$image" "$expected_id" "$expected_platform"
   record_count=$((record_count + 1))
 done <"$PACKAGE_ROOT/images.txt"
 (( record_count >= 1 && record_count <= 2 )) || die "应用更新镜像数量错误：$record_count"

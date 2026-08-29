@@ -8,6 +8,7 @@ import com.example.offlinedemo.platform.store.BlobStore;
 import com.example.offlinedemo.platform.store.PlatformStore;
 import com.example.offlinedemo.platform.util.CommandRunner;
 import com.example.offlinedemo.platform.util.FileSupport;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
@@ -185,7 +186,45 @@ public class BuildWorker {
                     line -> log(task.id, line));
             identity = inspectImage(image, target);
         }
-        return new ImageRecord(image, identity.id, target.ociPlatform(), null, artifact.sha256, localTar);
+        Path normalizedTar = normalizeApplicationArchive(task.id, component, task.targetVersion,
+                image, target, workspace);
+        return new ImageRecord(image, identity.id, target.ociPlatform(), null,
+                FileSupport.sha256(normalizedTar), normalizedTar);
+    }
+
+    /**
+     * 应用制品可能是旧版 Registry 导出 TAR，内部仍保存在线仓库标签。交付包不能直接复制该 TAR：
+     * 必须从已经校验过的目标镜像标签重新 docker save，并检查新 TAR 的 RepoTags。
+     */
+    Path normalizeApplicationArchive(String taskId, String component, String version, String image,
+                                     Models.BuildTarget target, Path workspace) throws Exception {
+        Path normalizedDir = workspace.resolve("normalized-app-images");
+        Files.createDirectories(normalizedDir);
+        String safeVersion = version.replaceAll("[^A-Za-z0-9._+-]", "-");
+        Path output = normalizedDir.resolve(component + "-" + safeVersion + "-"
+                + target.ociPlatform().replace('/', '-') + ".tar");
+        commands.run(List.of("docker", "save", "--output", output.toString(), image),
+                projectRoot, line -> log(taskId, line));
+        validateDockerSaveReference(output, image);
+        log(taskId, "应用镜像已按离线标签重新导出：" + image);
+        return output;
+    }
+
+    private void validateDockerSaveReference(Path archive, String expectedImage) throws Exception {
+        String manifestJson = commands.run(List.of("tar", "-xOf", archive.toString(), "manifest.json"),
+                projectRoot, this::discard).output();
+        JsonNode manifests = objectMapper.readTree(manifestJson);
+        if (manifests == null || !manifests.isArray() || manifests.isEmpty())
+            throw new IllegalStateException("应用镜像 TAR 缺少有效 manifest.json：" + archive.getFileName());
+        for (JsonNode manifest : manifests) {
+            JsonNode repoTags = manifest.path("RepoTags");
+            if (!repoTags.isArray()) continue;
+            for (JsonNode repoTag : repoTags) {
+                if (expectedImage.equals(repoTag.asText())) return;
+            }
+        }
+        throw new IllegalStateException("应用镜像 TAR 未保存交付标签 " + expectedImage
+                + "：" + archive.getFileName());
     }
 
     private PackageResult assemble(Models.BuildTask task, Models.Project project,
@@ -246,7 +285,6 @@ public class BuildWorker {
             writeMiddlewareSpec(root, profile);
             copyDockerMedia(root, selected, target, workspace.resolve(".cache"));
             FileSupport.copyTree(projectRoot.resolve("deploy/scripts"), root.resolve("scripts"));
-            parameterizeBootstrapInstaller(root.resolve("scripts/install-bootstrap.sh"), task, selected);
             copyIfExists(projectRoot.resolve("README.md"), root.resolve("README.md"));
             copyIfExists(projectRoot.resolve("部署手册.md"), root.resolve("部署手册.md"));
             FileSupport.copyTree(projectRoot.resolve("docs"), root.resolve("docs"));
@@ -324,21 +362,6 @@ public class BuildWorker {
         Path local = Path.of(script.storagePath);
         if (!Files.isRegularFile(local)) throw new IllegalStateException("脚本本地文件不存在：" + local);
         return local;
-    }
-
-    private void parameterizeBootstrapInstaller(Path installer, Models.BuildTask task,
-                                                Map<String, Models.Artifact> selected) throws IOException {
-        Models.BuildTarget target = targetOf(task);
-        String text = Files.readString(installer, StandardCharsets.UTF_8)
-                .replace("readonly REQUIRED_DOCKER_VERSION=29.7.0", "readonly REQUIRED_DOCKER_VERSION=" + selected.get("docker-engine").version)
-                .replace("readonly REQUIRED_COMPOSE_VERSION=5.4.0", "readonly REQUIRED_COMPOSE_VERSION=" + selected.get("docker-compose").version)
-                .replace("readonly APP_VERSION=1.1.1", "readonly APP_VERSION=" + task.targetVersion)
-                .replace("readonly REQUIRED_PLATFORM=linux/amd64", "readonly REQUIRED_PLATFORM=" + target.ociPlatform())
-                .replace("docker-compose-linux-x86_64", target.composeBinary())
-                .replace("[[ \"$(uname -m)\" == x86_64 ]] || die '目标机架构必须为 x86_64。'",
-                        "[[ \"$(uname -m)\" == " + target.unameArch() + " ]] || die '目标机架构必须为 " + target.unameArch() + "。'")
-                .replace("[[ \"$record_count\" -eq 6 ]]", "[[ \"$record_count\" -eq 6 ]]");
-        Files.writeString(installer, text, StandardCharsets.UTF_8);
     }
 
     private void parameterizeAppUpdateInstaller(Path installer, Models.BuildTarget target) throws IOException {

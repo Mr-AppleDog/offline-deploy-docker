@@ -7,10 +7,44 @@ PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-readonly REQUIRED_DOCKER_VERSION=29.7.0
-readonly REQUIRED_COMPOSE_VERSION=5.4.0
-readonly REQUIRED_PLATFORM=linux/amd64
-readonly APP_VERSION=1.1.1
+readonly MANIFEST="$PACKAGE_ROOT/manifest.env"
+[[ -f "$MANIFEST" ]] || die '离线包缺少 manifest.env。'
+
+manifest_value() {
+  local key="$1" count value
+  count="$(grep -c "^${key}=" "$MANIFEST" || true)"
+  [[ "$count" -eq 1 ]] || die "manifest 中 $key 必须且只能出现一次。"
+  value="$(sed -n "s/^${key}=//p" "$MANIFEST")"
+  [[ -n "$value" ]] || die "manifest 中 $key 不能为空。"
+  printf '%s' "$value"
+}
+
+readonly REQUIRED_DOCKER_VERSION="$(manifest_value DOCKER_VERSION)"
+readonly REQUIRED_COMPOSE_VERSION="$(manifest_value COMPOSE_VERSION)"
+readonly REQUIRED_PLATFORM="$(manifest_value TARGET_PLATFORM)"
+readonly TARGET_ARCH="$(manifest_value TARGET_ARCH)"
+readonly APP_VERSION="$(manifest_value APP_VERSION)"
+
+[[ "$REQUIRED_DOCKER_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$ ]] || \
+  die 'manifest 中 DOCKER_VERSION 格式错误。'
+[[ "$REQUIRED_COMPOSE_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$ ]] || \
+  die 'manifest 中 COMPOSE_VERSION 格式错误。'
+[[ "$APP_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$ ]] || \
+  die 'manifest 中 APP_VERSION 格式错误。'
+
+case "$TARGET_ARCH|$REQUIRED_PLATFORM" in
+  amd64\|linux/amd64)
+    readonly REQUIRED_UNAME_ARCH=x86_64
+    readonly COMPOSE_BINARY=docker-compose-linux-x86_64
+    ;;
+  arm64\|linux/arm64)
+    readonly REQUIRED_UNAME_ARCH=aarch64
+    readonly COMPOSE_BINARY=docker-compose-linux-aarch64
+    ;;
+  *)
+    die "离线包目标架构不受支持：$TARGET_ARCH / $REQUIRED_PLATFORM"
+    ;;
+esac
 
 require_root
 require_command sha256sum
@@ -19,11 +53,10 @@ require_command systemctl
 require_command ss
 require_command flock
 
-[[ "$(uname -m)" == x86_64 ]] || die '目标机架构必须为 x86_64。'
+[[ "$(uname -m)" == "$REQUIRED_UNAME_ARCH" ]] || die "目标机架构必须为 $REQUIRED_UNAME_ARCH。"
 [[ "$(ps -p 1 -o comm=)" == systemd ]] || die '目标机必须使用 systemd。'
 
 for required_file in \
-  "$PACKAGE_ROOT/manifest.env" \
   "$PACKAGE_ROOT/images.txt" \
   "$PACKAGE_ROOT/SHA256SUMS" \
   "$PACKAGE_ROOT/middleware/compose.middleware.yml" \
@@ -31,8 +64,8 @@ for required_file in \
   "$PACKAGE_ROOT/application/compose.app.yml" \
   "$PACKAGE_ROOT/docker/install/docker-${REQUIRED_DOCKER_VERSION}.tgz" \
   "$PACKAGE_ROOT/docker/install/docker-${REQUIRED_DOCKER_VERSION}.tgz.sha256" \
-  "$PACKAGE_ROOT/docker/install/docker-compose-linux-x86_64" \
-  "$PACKAGE_ROOT/docker/install/docker-compose-linux-x86_64.sha256" \
+  "$PACKAGE_ROOT/docker/install/$COMPOSE_BINARY" \
+  "$PACKAGE_ROOT/docker/install/$COMPOSE_BINARY.sha256" \
   "$PACKAGE_ROOT/docker/install/daemon.json" \
   "$PACKAGE_ROOT/docker/install/docker.service"
 do
@@ -43,10 +76,8 @@ readarray -t MIDDLEWARE_COMPONENTS < "$PACKAGE_ROOT/middleware.list" || die '读
 [[ "${#MIDDLEWARE_COMPONENTS[@]}" -ge 1 ]] || die 'middleware.list 为空。'
 readonly EXPECTED_IMAGE_COUNT=$(( ${#MIDDLEWARE_COMPONENTS[@]} + 2 ))
 
-grep -qx 'PACKAGE_TYPE=bootstrap' "$PACKAGE_ROOT/manifest.env" || die '离线包类型不是 bootstrap。'
-grep -qx "APP_VERSION=$APP_VERSION" "$PACKAGE_ROOT/manifest.env" || die "离线包版本不是 $APP_VERSION。"
-grep -qx "TARGET_PLATFORM=$REQUIRED_PLATFORM" "$PACKAGE_ROOT/manifest.env" || die "离线包平台不是 $REQUIRED_PLATFORM。"
-grep -qx 'CREDENTIAL_MODE=embedded-compose' "$PACKAGE_ROOT/manifest.env" || die '凭据模式不是 embedded-compose。'
+grep -qx 'PACKAGE_TYPE=bootstrap' "$MANIFEST" || die '离线包类型不是 bootstrap。'
+grep -qx 'CREDENTIAL_MODE=embedded-compose' "$MANIFEST" || die '凭据模式不是 embedded-compose。'
 
 log '校验包内 SHA256。'
 (
@@ -105,32 +136,37 @@ install -m 0600 \
   "$PACKAGE_ROOT/docker/install/docker-${REQUIRED_DOCKER_VERSION}.tgz.sha256" \
   "$KUNLUN_ROOT/docker/install/docker-${REQUIRED_DOCKER_VERSION}.tgz.sha256"
 install -m 0700 \
-  "$PACKAGE_ROOT/docker/install/docker-compose-linux-x86_64" \
-  "$KUNLUN_ROOT/docker/install/docker-compose-linux-x86_64"
+  "$PACKAGE_ROOT/docker/install/$COMPOSE_BINARY" \
+  "$KUNLUN_ROOT/docker/install/$COMPOSE_BINARY"
 install -m 0600 \
-  "$PACKAGE_ROOT/docker/install/docker-compose-linux-x86_64.sha256" \
-  "$KUNLUN_ROOT/docker/install/docker-compose-linux-x86_64.sha256"
+  "$PACKAGE_ROOT/docker/install/$COMPOSE_BINARY.sha256" \
+  "$KUNLUN_ROOT/docker/install/$COMPOSE_BINARY.sha256"
 install -m 0600 "$PACKAGE_ROOT/docker/install/daemon.json" "$KUNLUN_ROOT/docker/install/daemon.json"
 install -m 0600 "$PACKAGE_ROOT/docker/install/docker.service" "$KUNLUN_ROOT/docker/install/docker.service"
 
 (
   cd "$KUNLUN_ROOT/docker/install"
   sha256sum -c "docker-${REQUIRED_DOCKER_VERSION}.tgz.sha256"
-  sha256sum -c docker-compose-linux-x86_64.sha256
+  sha256sum -c "$COMPOSE_BINARY.sha256"
 )
 
+verify_docker_runtime() {
+  local compose_version
+  require_docker
+  [[ "$(docker info --format '{{.ServerVersion}}')" == "$REQUIRED_DOCKER_VERSION" ]] || \
+    die "Docker 实际版本不是包内声明的 $REQUIRED_DOCKER_VERSION。"
+  [[ "$(docker info --format '{{.DockerRootDir}}')" == "$KUNLUN_ROOT/docker/data" ]] || \
+    die "Docker Root Dir 不是 $KUNLUN_ROOT/docker/data。"
+  compose_version="$(docker compose version --short | sed 's/^v//')"
+  [[ "$compose_version" == "$REQUIRED_COMPOSE_VERSION" ]] || \
+    die "Compose 实际版本不是包内声明的 $REQUIRED_COMPOSE_VERSION。"
+}
+
 install_docker() {
-  local tmp_dir compose_version docker_ready
+  local tmp_dir docker_ready
 
   if command -v docker >/dev/null 2>&1; then
-    require_docker
-    [[ "$(docker info --format '{{.ServerVersion}}')" == "$REQUIRED_DOCKER_VERSION" ]] || \
-      die "已有 Docker 版本不是 $REQUIRED_DOCKER_VERSION。"
-    [[ "$(docker info --format '{{.DockerRootDir}}')" == "$KUNLUN_ROOT/docker/data" ]] || \
-      die "已有 Docker Root Dir 不是 $KUNLUN_ROOT/docker/data。"
-    compose_version="$(docker compose version --short | sed 's/^v//')"
-    [[ "$compose_version" == "$REQUIRED_COMPOSE_VERSION" ]] || \
-      die "已有 Compose 版本不是 $REQUIRED_COMPOSE_VERSION。"
+    verify_docker_runtime
     log '复用符合要求的 Docker 和 Compose。'
     return
   fi
@@ -149,7 +185,7 @@ install_docker() {
   install -m 0755 "$tmp_dir"/docker/* /usr/local/bin/
   install -d -m 0755 /usr/local/lib/docker/cli-plugins /etc/docker
   install -m 0755 \
-    "$KUNLUN_ROOT/docker/install/docker-compose-linux-x86_64" \
+    "$KUNLUN_ROOT/docker/install/$COMPOSE_BINARY" \
     /usr/local/lib/docker/cli-plugins/docker-compose
   install -m 0644 "$KUNLUN_ROOT/docker/install/daemon.json" /etc/docker/daemon.json
   install -m 0644 "$KUNLUN_ROOT/docker/install/docker.service" /etc/systemd/system/docker.service
@@ -176,7 +212,7 @@ install_docker() {
     sleep 1
   done
   [[ "$docker_ready" == true ]] || die 'Docker daemon 在 30 秒内未就绪。'
-  require_docker
+  verify_docker_runtime
 }
 
 install_docker
@@ -198,15 +234,11 @@ while IFS='|' read -r image expected_id expected_platform tar_relative expected_
   [[ "$actual_tar_hash" == "$expected_tar_hash" ]] || die "镜像 tar 校验失败：$image"
 
   if docker image inspect "$image" >/dev/null 2>&1; then
-    actual_identity="$(docker image inspect --format '{{.Id}}|{{.Os}}/{{.Architecture}}' "$image")"
-    [[ "$actual_identity" == "$expected_id|$expected_platform" ]] || \
-      die "已有镜像与交付清单不一致：$image"
+    ensure_image_identity "$image" "$expected_id" "$expected_platform"
     log "复用已存在镜像：$image"
   else
     docker load -i "$tar_path"
-    actual_identity="$(docker image inspect --format '{{.Id}}|{{.Os}}/{{.Architecture}}' "$image")"
-    [[ "$actual_identity" == "$expected_id|$expected_platform" ]] || \
-      die "导入后镜像与交付清单不一致：$image"
+    ensure_image_identity "$image" "$expected_id" "$expected_platform"
   fi
   record_count=$((record_count + 1))
 done <"$PACKAGE_ROOT/images.txt"
@@ -226,4 +258,4 @@ fi
 bash "$KUNLUN_ROOT/scripts/start.sh"
 bash "$KUNLUN_ROOT/scripts/status.sh"
 
-log 'Kunlun 1.1.1 bootstrap 初始化、启动和健康验收全部完成。'
+log "Kunlun $APP_VERSION bootstrap 初始化、启动和健康验收全部完成。"

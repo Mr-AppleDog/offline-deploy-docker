@@ -74,6 +74,27 @@ require_docker() {
   docker compose version >/dev/null 2>&1 || die 'docker compose 插件不可用。'
 }
 
+# 校验清单中的镜像身份。兼容旧交付包中 TAR 保存了 Registry 标签、但清单和 Compose
+# 使用离线标签的情况：只允许从清单声明的同一镜像 ID 补充标签，禁止按名称猜测。
+ensure_image_identity() {
+  local image="$1" expected_id="$2" expected_platform="$3"
+  local source_identity actual_identity
+
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    docker image inspect "$expected_id" >/dev/null 2>&1 || \
+      die "导入后未找到清单镜像或目标标签：$image（$expected_id）"
+    source_identity="$(docker image inspect --format '{{.Id}}|{{.Os}}/{{.Architecture}}' "$expected_id")"
+    [[ "$source_identity" == "$expected_id|$expected_platform" ]] || \
+      die "导入镜像 ID 或平台与交付清单不一致：$image"
+    docker tag "$expected_id" "$image"
+    log "已依据镜像 ID 补充离线标签：$image"
+  fi
+
+  actual_identity="$(docker image inspect --format '{{.Id}}|{{.Os}}/{{.Architecture}}' "$image")"
+  [[ "$actual_identity" == "$expected_id|$expected_platform" ]] || \
+    die "镜像身份与交付清单不一致：$image"
+}
+
 ensure_lock_dir() {
   install -d -m 0700 "$LOCK_DIR"
 }
