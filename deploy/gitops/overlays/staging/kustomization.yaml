@@ -13,7 +13,7 @@ resources:
 images:
   - name: offline-delivery-backend
     newName: localhost:5000/offline-delivery-backend
-    newTag: placeholder
+    newTag: sha-365fa93
   - name: offline-delivery-frontend
     newName: localhost:5000/offline-delivery-frontend
-    newTag: placeholder
+    newTag: sha-365fa93
