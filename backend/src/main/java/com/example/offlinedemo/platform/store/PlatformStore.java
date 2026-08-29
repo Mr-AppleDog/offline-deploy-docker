@@ -50,6 +50,22 @@ public class PlatformStore {
             if (project.repositories == null) { project.repositories = new java.util.ArrayList<>(); recovered = true; }
             if (project.imageRegistries == null) { project.imageRegistries = new java.util.ArrayList<>(); recovered = true; }
         }
+        if (state.projects.size() == 1) {
+            Models.Project onlyProject = state.projects.values().iterator().next();
+            for (Models.DeploymentProfile profile : state.profiles.values()) {
+                if (profile.projectId == null || profile.projectId.isBlank()) {
+                    profile.projectId = onlyProject.id;
+                    recovered = true;
+                }
+            }
+        }
+        for (Models.DeploymentProfile profile : state.profiles.values()) {
+            Models.Project project = state.projects.get(profile.projectId);
+            if (project != null && (profile.deployedVersion == null || profile.deployedVersion.isBlank())) {
+                profile.deployedVersion = project.currentVersion;
+                recovered = true;
+            }
+        }
         for (Models.BuildTask task : state.builds.values()) {
             if ("QUEUED".equals(task.status) || "RUNNING".equals(task.status)) {
                 task.status = "FAILED";

@@ -29,6 +29,10 @@ public class BuildService {
     public Models.BuildTask create(BuildInput input) {
         Models.Project project = store.project(input.projectId);
         Models.DeploymentProfile profile = store.profile(input.profileId);
+        if (profile.projectId == null || profile.projectId.isBlank())
+            throw new IllegalArgumentException("部署配置尚未绑定项目，请先到部署配置页完成归属设置");
+        if (!project.id.equals(profile.projectId))
+            throw new IllegalArgumentException("部署配置属于其他项目，不能用于当前项目构建");
         Models.BuildTarget target = Models.BuildTarget.of(project.targetOs, project.targetArch).normalized();
         if (input.targetOs != null && !input.targetOs.isBlank() && !target.os.equals(input.targetOs))
             throw new IllegalArgumentException("构建目标系统必须使用项目创建时固定的 " + target.os);
@@ -46,6 +50,9 @@ public class BuildService {
         else {
             requireVersion(input.fromVersion, "起始版本");
             if (input.fromVersion.equals(input.targetVersion)) throw new IllegalArgumentException("更新包的起始版本和目标版本不能相同");
+            if (profile.deployedVersion != null && !profile.deployedVersion.isBlank()
+                    && !profile.deployedVersion.equals(input.fromVersion))
+                throw new IllegalArgumentException("应用更新包必须从站点已部署版本 " + profile.deployedVersion + " 开始");
         }
         List<String> dbInitSqlIds = input.dbInitSqlIds == null ? List.of() : List.copyOf(input.dbInitSqlIds);
         List<String> dbMigrationSqlIds = input.dbMigrationSqlIds == null ? List.of() : List.copyOf(input.dbMigrationSqlIds);

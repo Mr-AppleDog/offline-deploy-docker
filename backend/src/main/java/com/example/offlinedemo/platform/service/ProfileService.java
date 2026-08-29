@@ -28,6 +28,8 @@ public class ProfileService {
 
     public Models.DeploymentProfile save(String id, ProfileInput input) {
         if (input.name == null || input.name.isBlank()) throw new IllegalArgumentException("配置名称不能为空");
+        if (input.projectId == null || input.projectId.isBlank()) throw new IllegalArgumentException("部署配置必须绑定项目");
+        Models.Project project = store.project(input.projectId);
         Instant now = Instant.now();
         boolean creating = id == null;
         Models.DeploymentProfile profile;
@@ -40,9 +42,16 @@ public class ProfileService {
             profile = store.profile(id);
         }
 
+        if (!creating && profile.projectId != null && !profile.projectId.isBlank()
+                && !profile.projectId.equals(project.id))
+            throw new IllegalArgumentException("部署配置所属项目创建后不可修改，请为目标项目新建配置");
+        profile.projectId = project.id;
         profile.name = input.name.trim();
         profile.environment = defaultValue(input.environment, "生产环境");
-        Models.BuildTarget target = Models.BuildTarget.of(input.targetOs, input.targetArch).normalized();
+        String deployedVersion = defaultValue(input.deployedVersion, project.currentVersion);
+        requireVersion(deployedVersion, "已部署版本");
+        profile.deployedVersion = deployedVersion;
+        Models.BuildTarget target = Models.BuildTarget.of(project.targetOs, project.targetArch).normalized();
         profile.targetOs = target.os;
         profile.targetArch = target.arch;
         profile.frontendPort = input.frontendPort == null ? 80 : input.frontendPort;
@@ -113,10 +122,16 @@ public class ProfileService {
     }
 
     private String defaultValue(String value, String fallback) { return value == null || value.isBlank() ? fallback : value.trim(); }
+    private void requireVersion(String value, String label) {
+        if (value == null || !value.matches("^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"))
+            throw new IllegalArgumentException(label + "必须使用语义化版本，例如 1.2.3");
+    }
 
     public static final class ProfileInput {
+        public String projectId;
         public String name;
         public String environment;
+        public String deployedVersion;
         public String targetOs;
         public String targetArch;
         public Integer frontendPort;

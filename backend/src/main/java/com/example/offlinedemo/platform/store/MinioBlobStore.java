@@ -5,6 +5,7 @@ import io.minio.DownloadObjectArgs;
 import io.minio.GetObjectArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
+import io.minio.StatObjectArgs;
 import io.minio.UploadObjectArgs;
 
 import java.io.InputStream;
@@ -51,6 +52,17 @@ public class MinioBlobStore implements BlobStore {
     @Override
     public InputStream open(BlobRef ref) throws Exception {
         return client.getObject(GetObjectArgs.builder().bucket(bucket).object(ref.ref()).build());
+    }
+
+    @Override
+    public long size(BlobRef ref) throws Exception {
+        return client.statObject(StatObjectArgs.builder().bucket(bucket).object(ref.ref()).build()).size();
+    }
+
+    @Override
+    public InputStream open(BlobRef ref, long offset, long length) throws Exception {
+        return client.getObject(GetObjectArgs.builder()
+                .bucket(bucket).object(ref.ref()).offset(offset).length(length).build());
     }
 
     @Override

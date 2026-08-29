@@ -65,8 +65,9 @@ public class ProjectService {
     public void delete(String projectId) {
         boolean hasArtifacts = store.artifacts().stream().anyMatch(value -> projectId.equals(value.projectId));
         boolean hasBuilds = store.builds().stream().anyMatch(value -> projectId.equals(value.projectId));
-        if (hasArtifacts || hasBuilds)
-            throw new IllegalArgumentException("项目已有制品或构建历史，为保证追溯记录不能删除");
+        boolean hasProfiles = store.profiles().stream().anyMatch(value -> projectId.equals(value.projectId));
+        if (hasArtifacts || hasBuilds || hasProfiles)
+            throw new IllegalArgumentException("项目已有部署配置、制品或构建历史，为保证追溯记录不能删除");
         store.deleteProject(projectId);
     }
 

@@ -156,8 +156,12 @@ public final class Models {
 
     public static final class DeploymentProfile {
         public String id;
+        /** 配置所属项目。一个配置代表该项目在一个具体站点的部署状态。 */
+        public String projectId;
         public String name;
         public String environment;
+        /** 该站点当前实际部署的应用版本，APP_UPDATE 必须从此版本开始。 */
+        public String deployedVersion;
         public int revision;
         public String targetOs;
         public String targetArch;

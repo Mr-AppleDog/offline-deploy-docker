@@ -1,16 +1,13 @@
 package com.example.offlinedemo.platform.controller;
 
 import com.example.offlinedemo.platform.domain.Models;
+import com.example.offlinedemo.platform.service.DownloadService;
 import com.example.offlinedemo.platform.service.BuildService;
 import com.example.offlinedemo.platform.store.BlobStore;
 import com.example.offlinedemo.platform.store.PlatformStore;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.InputStreamResource;
-import org.springframework.core.io.Resource;
-import org.springframework.http.ContentDisposition;
-import org.springframework.http.HttpHeaders;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,12 +26,12 @@ import java.util.Map;
 public class BuildController {
     private final PlatformStore store;
     private final BuildService builds;
-    private final BlobStore blobStore;
+    private final DownloadService downloads;
 
-    public BuildController(PlatformStore store, BuildService builds, BlobStore blobStore) {
+    public BuildController(PlatformStore store, BuildService builds, DownloadService downloads) {
         this.store = store;
         this.builds = builds;
-        this.blobStore = blobStore;
+        this.downloads = downloads;
     }
 
     @GetMapping
@@ -54,30 +51,22 @@ public class BuildController {
     }
 
     @GetMapping("/{id}/download")
-    public ResponseEntity<Resource> download(@PathVariable String id) throws Exception {
+    public void download(@PathVariable String id, HttpServletRequest request, HttpServletResponse response) throws Exception {
         Models.BuildTask task = store.build(id);
         if (!"SUCCEEDED".equals(task.status))
             throw new IllegalArgumentException("该任务还没有可下载的交付物");
         String name = task.artifactName == null ? task.targetVersion + ".tar.gz" : task.artifactName;
         if ("minio".equals(task.artifactStoreType) && task.artifactObjectKey != null) {
-            Resource body = new InputStreamResource(blobStore.open(new BlobStore.BlobRef("minio", task.artifactObjectKey)));
-            return ResponseEntity.ok()
-                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                    .header(HttpHeaders.CONTENT_DISPOSITION,
-                            ContentDisposition.attachment().filename(name, StandardCharsets.UTF_8).build().toString())
-                    .body(body);
+            downloads.downloadBlob(new BlobStore.BlobRef("minio", task.artifactObjectKey),
+                    name, task.sha256, request, response);
+            return;
         }
         if (task.artifactPath == null)
             throw new IllegalArgumentException("该任务还没有可下载的交付物");
         Path path = Path.of(task.artifactPath).toAbsolutePath().normalize();
         if (!path.startsWith(store.deliveriesRoot().toAbsolutePath().normalize()) || !Files.isRegularFile(path))
             throw new IllegalArgumentException("交付物不存在或路径无效");
-        Resource resource = new FileSystemResource(path);
-        return ResponseEntity.ok()
-                .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .header(HttpHeaders.CONTENT_DISPOSITION,
-                        ContentDisposition.attachment().filename(name, StandardCharsets.UTF_8).build().toString())
-                .body(resource);
+        downloads.downloadLocal(path, name, task.sha256, request, response);
     }
 
     @GetMapping("/{id}/checksum")

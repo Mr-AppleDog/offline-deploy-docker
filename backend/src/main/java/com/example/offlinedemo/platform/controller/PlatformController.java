@@ -278,8 +278,11 @@ public class PlatformController {
     private Map<String, Object> profileView(Models.DeploymentProfile profile) {
         Map<String, Object> view = new LinkedHashMap<>();
         view.put("id", profile.id);
+        view.put("projectId", profile.projectId == null ? "" : profile.projectId);
+        view.put("projectName", projectName(profile.projectId));
         view.put("name", profile.name);
         view.put("environment", profile.environment);
+        view.put("deployedVersion", profile.deployedVersion == null ? "" : profile.deployedVersion);
         view.put("revision", profile.revision);
         view.put("targetOs", profile.targetOs);
         view.put("targetArch", profile.targetArch);
@@ -290,6 +293,12 @@ public class PlatformController {
         view.put("createdAt", profile.createdAt);
         view.put("updatedAt", profile.updatedAt);
         return view;
+    }
+
+    private String projectName(String projectId) {
+        if (projectId == null || projectId.isBlank()) return "未绑定项目";
+        try { return store.project(projectId).name; }
+        catch (PlatformStore.NotFoundException ignored) { return "项目已删除"; }
     }
 
     private Map<String, Object> credentialView(Models.MiddlewareCredential mc) {

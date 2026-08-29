@@ -55,6 +55,31 @@ class BuildServiceProjectBindingTest {
                 .hasMessageContaining("必须使用项目创建时固定的 amd64");
     }
 
+    @Test
+    void rejectsProfileBoundToAnotherProject() {
+        Models.DeploymentProfile profile = profile();
+        profile.projectId = "project-2";
+        when(store.project("project-1")).thenReturn(project());
+        when(store.profile("profile-1")).thenReturn(profile);
+
+        assertThatThrownBy(() -> service.create(input(List.of())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("部署配置属于其他项目");
+    }
+
+    @Test
+    void updateMustStartFromProfileDeployedVersion() {
+        when(store.project("project-1")).thenReturn(project());
+        when(store.profile("profile-1")).thenReturn(profile());
+        BuildService.BuildInput input = input(List.of());
+        input.packageType = "APP_UPDATE";
+        input.fromVersion = "1.1.0";
+
+        assertThatThrownBy(() -> service.create(input))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("已部署版本 1.0.0");
+    }
+
     private BuildService.BuildInput input(List<String> artifactIds) {
         BuildService.BuildInput input = new BuildService.BuildInput();
         input.projectId = "project-1";
@@ -80,7 +105,9 @@ class BuildServiceProjectBindingTest {
     private Models.DeploymentProfile profile() {
         Models.DeploymentProfile profile = new Models.DeploymentProfile();
         profile.id = "profile-1";
+        profile.projectId = "project-1";
         profile.name = "Production";
+        profile.deployedVersion = "1.0.0";
         profile.revision = 1;
         profile.targetOs = "kylin-v10";
         profile.targetArch = "amd64";

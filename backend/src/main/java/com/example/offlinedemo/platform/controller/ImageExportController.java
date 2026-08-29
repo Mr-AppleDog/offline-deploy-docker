@@ -1,16 +1,13 @@
 package com.example.offlinedemo.platform.controller;
 
 import com.example.offlinedemo.platform.domain.Models;
+import com.example.offlinedemo.platform.service.DownloadService;
 import com.example.offlinedemo.platform.service.ImageExportService;
 import com.example.offlinedemo.platform.store.BlobStore;
 import com.example.offlinedemo.platform.store.PlatformStore;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.InputStreamResource;
-import org.springframework.core.io.Resource;
-import org.springframework.http.ContentDisposition;
-import org.springframework.http.HttpHeaders;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,12 +25,13 @@ import java.util.List;
 public class ImageExportController {
     private final PlatformStore store;
     private final ImageExportService imageExports;
-    private final BlobStore blobStore;
+    private final DownloadService downloads;
 
-    public ImageExportController(PlatformStore store, ImageExportService imageExports, BlobStore blobStore) {
+    public ImageExportController(PlatformStore store, ImageExportService imageExports,
+                                 DownloadService downloads) {
         this.store = store;
         this.imageExports = imageExports;
-        this.blobStore = blobStore;
+        this.downloads = downloads;
     }
 
     @GetMapping("/image-export-tasks")
@@ -55,20 +53,17 @@ public class ImageExportController {
     }
 
     @GetMapping("/artifacts/{id}/download")
-    public ResponseEntity<Resource> downloadArtifact(@PathVariable String id) throws Exception {
+    public void downloadArtifact(@PathVariable String id, HttpServletRequest request,
+                                 HttpServletResponse response) throws Exception {
         Models.Artifact artifact = store.artifact(id);
-        Resource body;
         if ("minio".equals(artifact.storeType)) {
-            body = new InputStreamResource(blobStore.open(new BlobStore.BlobRef("minio", artifact.objectKey)));
+            downloads.downloadBlob(new BlobStore.BlobRef("minio", artifact.objectKey),
+                    artifact.fileName, artifact.sha256, request, response);
         } else {
             Path path = Path.of(artifact.storagePath).toAbsolutePath().normalize();
             if (!path.startsWith(store.artifactsRoot().toAbsolutePath().normalize()) || !Files.isRegularFile(path))
                 throw new IllegalArgumentException("制品不存在或路径无效");
-            body = new FileSystemResource(path);
+            downloads.downloadLocal(path, artifact.fileName, artifact.sha256, request, response);
         }
-        return ResponseEntity.ok().contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .header(HttpHeaders.CONTENT_DISPOSITION,
-                        ContentDisposition.attachment().filename(artifact.fileName, StandardCharsets.UTF_8).build().toString())
-                .body(body);
     }
 }
