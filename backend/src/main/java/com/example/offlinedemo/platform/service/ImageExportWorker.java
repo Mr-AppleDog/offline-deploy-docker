@@ -85,9 +85,15 @@ public class ImageExportWorker {
             String digest = digests == null || digests.isEmpty() ? null : digests.get(0);
 
             stage(taskId, "导出 docker save TAR", 70);
+            String archiveImageReference = archiveImageReference(task);
+            if (!task.imageReference.equals(archiveImageReference)) {
+                commands.run(List.of("docker", "tag", task.imageReference, archiveImageReference),
+                        projectRoot, dockerEnvironment, line -> log(taskId, line));
+                log(taskId, "离线部署镜像标签：" + archiveImageReference);
+            }
             String safeVersion = task.version.replaceAll("[^A-Za-z0-9._+-]", "-");
             Path output = workspace.resolve(task.component + "-" + safeVersion + "-" + target.ociPlatform().replace('/', '-') + ".tar");
-            commands.run(List.of("docker", "save", "--output", output.toString(), task.imageReference),
+            commands.run(List.of("docker", "save", "--output", output.toString(), archiveImageReference),
                     projectRoot, dockerEnvironment, line -> log(taskId, line));
 
             stage(taskId, "写入制品库", 90);
@@ -102,6 +108,7 @@ public class ImageExportWorker {
             metadata.gitCommit = task.gitCommit;
             metadata.imageRegistryId = task.imageRegistryId;
             metadata.imageReference = task.imageReference;
+            metadata.archiveImageReference = archiveImageReference;
             metadata.imageId = parts[0];
             metadata.imageDigest = digest;
             Models.Artifact artifact = artifacts.importFile(task.component, task.version, output.toString(),
@@ -150,6 +157,13 @@ public class ImageExportWorker {
         Models.Project project = store.project(task.projectId);
         return project.imageRegistries.stream().filter(value -> task.imageRegistryId.equals(value.id)).findFirst()
                 .orElseThrow(() -> new IllegalStateException("应用镜像仓库绑定已被删除"));
+    }
+
+    private String archiveImageReference(Models.ImageExportTask task) {
+        if (task.projectId == null || task.projectId.isBlank()
+                || task.applicationRole == null || task.applicationRole.isBlank()) return task.imageReference;
+        Models.Project project = store.project(task.projectId);
+        return project.appKey + "-" + task.applicationRole.toLowerCase(java.util.Locale.ROOT) + ":" + task.version;
     }
 
     private void stage(String taskId, String stage, int progress) {

@@ -102,6 +102,7 @@ public class ArtifactService {
         artifact.gitCommit = clean(details.gitCommit);
         artifact.imageRegistryId = clean(details.imageRegistryId);
         artifact.imageReference = clean(details.imageReference);
+        artifact.archiveImageReference = clean(details.archiveImageReference);
         artifact.imageId = clean(details.imageId);
         artifact.imageDigest = clean(details.imageDigest);
 
@@ -133,6 +134,7 @@ public class ArtifactService {
         public String gitCommit;
         public String imageRegistryId;
         public String imageReference;
+        public String archiveImageReference;
         public String imageId;
         public String imageDigest;
     }

@@ -201,6 +201,8 @@ public final class Models {
         public String imageRegistryId;
         /** docker pull/save 制品的原始镜像引用及校验后的镜像 ID。 */
         public String imageReference;
+        /** docker save TAR 内实际保存的镜像引用；旧制品为空时由构建器兼容推断。 */
+        public String archiveImageReference;
         public String imageId;
         public String imageDigest;
         public Instant createdAt;

@@ -64,6 +64,7 @@ class ImageExportServiceTest {
         Models.Project project = new Models.Project();
         project.id = "project-1";
         project.name = "订单系统";
+        project.appKey = "order";
         project.targetOs = "kylin-v10";
         project.targetArch = "arm64";
         Models.RepositoryConfig source = new Models.RepositoryConfig();
@@ -80,7 +81,14 @@ class ImageExportServiceTest {
         registry.authType = "NONE";
         project.imageRegistries.add(registry);
         when(store.project("project-1")).thenReturn(project);
-        when(store.artifacts()).thenReturn(List.of());
+        Models.Artifact legacyArtifact = new Models.Artifact();
+        legacyArtifact.component = "app-backend";
+        legacyArtifact.version = "1.2.3";
+        legacyArtifact.architecture = "linux/arm64";
+        legacyArtifact.projectId = "project-1";
+        legacyArtifact.imageReference = "harbor.example.com/team/order-backend:v1.2.3";
+        legacyArtifact.gitCommit = "abcdef1234567";
+        when(store.artifacts()).thenReturn(List.of(legacyArtifact));
         when(store.imageExportTasks()).thenReturn(List.of());
 
         ImageExportService.ImageExportInput input = new ImageExportService.ImageExportInput();
@@ -101,6 +109,7 @@ class ImageExportServiceTest {
         assertThat(task.gitCommit).isEqualTo("abcdef1234567");
         assertThat(task.targetArch).isEqualTo("arm64");
         assertThat(task.status).isEqualTo("QUEUED");
+        assertThat(task.reused).isFalse();
         verify(store).putImageExportTask(task);
         verify(executor).execute(org.mockito.ArgumentMatchers.any());
     }

@@ -169,7 +169,22 @@ public class BuildWorker {
         log(task.id, "加载应用镜像 " + image + "（制品 " + artifact.fileName + "）");
         commands.run(List.of("docker", "load", "--input", localTar.toString()), projectRoot,
                 line -> log(task.id, line));
-        ImageIdentity identity = inspectImage(image, target);
+        String archivedImage = artifact.archiveImageReference;
+        if (archivedImage == null || archivedImage.isBlank()) {
+            archivedImage = "REGISTRY_EXPORT".equals(artifact.sourceType)
+                    && artifact.imageReference != null && !artifact.imageReference.isBlank()
+                    ? artifact.imageReference : image;
+        }
+        ImageIdentity identity = inspectImage(archivedImage, target);
+        if (artifact.imageId != null && !artifact.imageId.isBlank() && !artifact.imageId.equals(identity.id))
+            throw new IllegalStateException("应用镜像制品 ID 不一致：记录为 " + artifact.imageId
+                    + "，TAR 中为 " + identity.id);
+        if (!image.equals(archivedImage)) {
+            log(task.id, "兼容旧制品镜像标签 " + archivedImage + "，转换为 " + image);
+            commands.run(List.of("docker", "tag", archivedImage, image), projectRoot,
+                    line -> log(task.id, line));
+            identity = inspectImage(image, target);
+        }
         return new ImageRecord(image, identity.id, target.ociPlatform(), null, artifact.sha256, localTar);
     }
 

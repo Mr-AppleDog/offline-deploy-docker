@@ -116,6 +116,7 @@ public class ImageExportService {
 
         String component = "app-" + role.toLowerCase(Locale.ROOT);
         String imageReference = ApplicationRegistryService.imageReference(registry, input.tag);
+        String archiveImageReference = project.appKey + "-" + role.toLowerCase(Locale.ROOT) + ":" + input.version;
         String commit = input.gitCommit.toLowerCase(Locale.ROOT);
         Models.ImageExportTask task = new Models.ImageExportTask();
         task.id = UUID.randomUUID().toString();
@@ -140,6 +141,7 @@ public class ImageExportService {
                         && target.ociPlatform().equals(value.architecture)
                         && project.id.equals(value.projectId)
                         && imageReference.equals(value.imageReference)
+                        && archiveImageReference.equals(value.archiveImageReference)
                         && commit.equals(value.gitCommit))
                 .findFirst().orElse(null);
         if (existing != null) {
